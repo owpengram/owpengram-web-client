@@ -7,7 +7,7 @@
 
 import {TLSerialization} from '@lib/mtproto/tl_utils';
 import cryptoWorker from '@lib/crypto/cryptoMessagePort';
-import Modes from '@config/modes';
+import {OWPENGRAM_RSA_EXPONENT, OWPENGRAM_RSA_MODULUS} from '@config/owpengram';
 import bytesFromHex from '@helpers/bytes/bytesFromHex';
 import bytesToHex from '@helpers/bytes/bytesToHex';
 import bigInt from 'big-integer';
@@ -18,6 +18,24 @@ export type RSAPublicKeyHex = {
 };
 
 export class RSAKeysManager {
+  /**
+   * The key the MTProto handshake encrypts req_DH_params to, looked up by the
+   * fingerprint the server offers in res_pq -- so this has to be the key of
+   * the server actually being talked to. Telegram's own keys, which this
+   * replaced, are kept below as a commented record.
+   *
+   * One key for both the normal and the test path: a self-hosted server has
+   * no separate test cluster, and ?test=1 only changes the request path
+   * (apiws_test), not which machine answers.
+   *
+   * See @config/owpengram for where the value comes from and how to re-derive
+   * it after regenerating the server's key.
+   */
+  private owpengramKeysHex: RSAPublicKeyHex[] = [{
+    modulus: OWPENGRAM_RSA_MODULUS,
+    exponent: OWPENGRAM_RSA_EXPONENT
+  }];
+
   /**
    *  Server public key, obtained from here: https://core.telegram.org/api/obtaining_api_id
    *
@@ -62,16 +80,15 @@ export class RSAKeysManager {
     exponent: '010001'
   }]; */
 
-  private testPublicKeysHex: RSAPublicKeyHex[] = [{
+  /* private testPublicKeysHex: RSAPublicKeyHex[] = [{
     modulus: 'c8c11d635691fac091dd9489aedced2932aa8a0bcefef05fa800892d9b52ed03200865c9e97211cb2ee6c7ae96d3fb0e15aeffd66019b44a08a240cfdd2868a85e1f54d6fa5deaa041f6941ddf302690d61dc476385c2fa655142353cb4e4b59f6e5b6584db76fe8b1370263246c010c93d011014113ebdf987d093f9d37c2be48352d69a1683f8f6e6c2167983c761e3ab169fde5daaa12123fa1beab621e4da5935e9c198f82f35eae583a99386d8110ea6bd1abb0f568759f62694419ea5f69847c43462abef858b4cb5edc84e7b9226cd7bd7e183aa974a712c079dde85b9dc063b8a5c08e8f859c0ee5dcd824c7807f20153361a7f63cfd2a433a1be7f5',
     exponent: '010001'
   }];
 
   private publisKeysHex: RSAPublicKeyHex[] = [{
-    // modulus: '00e8bb3305c0b52c6cf2afdf7637313489e63e05268e5badb601af417786472e5f93b85438968e20e6729a301c0afc121bf7151f834436f7fda680847a66bf64accec78ee21c0b316f0edafe2f41908da7bd1f4a5107638eeb67040ace472a14f90d9f7c2b7def99688ba3073adb5750bb02964902a359fe745d8170e36876d4fd8a5d41b2a76cbff9a13267eb9580b2d06d10357448d20d9da2191cb5d8c93982961cdfdeda629e37f1fb09a0722027696032fe61ed663db7a37f6f263d370f69db53a0dc0a1748bdaaff6209d5645485e6e001d1953255757e4b8e42813347b11da6ab500fd0ace7e6dfa3736199ccaf9397ed0745a427dcfa6cd67bcb1acff3',
     modulus: 'e8bb3305c0b52c6cf2afdf7637313489e63e05268e5badb601af417786472e5f93b85438968e20e6729a301c0afc121bf7151f834436f7fda680847a66bf64accec78ee21c0b316f0edafe2f41908da7bd1f4a5107638eeb67040ace472a14f90d9f7c2b7def99688ba3073adb5750bb02964902a359fe745d8170e36876d4fd8a5d41b2a76cbff9a13267eb9580b2d06d10357448d20d9da2191cb5d8c93982961cdfdeda629e37f1fb09a0722027696032fe61ed663db7a37f6f263d370f69db53a0dc0a1748bdaaff6209d5645485e6e001d1953255757e4b8e42813347b11da6ab500fd0ace7e6dfa3736199ccaf9397ed0745a427dcfa6cd67bcb1acff3',
     exponent: '010001'
-  }];
+  }]; */
 
   private publicKeysParsed: {
     [hex: string]: RSAPublicKeyHex
@@ -79,19 +96,13 @@ export class RSAKeysManager {
   private prepared = false;
   private preparePromise: Promise<void> = null;
 
-  constructor() {
-    if(Modes.test) {
-      this.publisKeysHex = this.testPublicKeysHex;
-    }
-  }
-
   public prepare(): Promise<void> {
     if(this.preparePromise) return this.preparePromise;
     else if(this.prepared) {
       return Promise.resolve();
     }
 
-    return this.preparePromise = Promise.all(this.publisKeysHex.map((keyParsed) => {
+    return this.preparePromise = Promise.all(this.owpengramKeysHex.map((keyParsed) => {
       const RSAPublicKey = new TLSerialization();
       RSAPublicKey.storeBytes(bytesFromHex(keyParsed.modulus), 'n');
       RSAPublicKey.storeBytes(bytesFromHex(keyParsed.exponent), 'e');

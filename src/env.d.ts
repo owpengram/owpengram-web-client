@@ -16,6 +16,10 @@ interface ImportMetaEnv {
   readonly VITE_MTPROTO_HAS_HTTP: string;
   readonly VITE_MTPROTO_HAS_WS: string;
   readonly VITE_SAFARI_PROXY_WEBSOCKET: string;
+  // which owpengram-server this build talks to, and the RSA key its handshake
+  // is encrypted to -- see @config/owpengram
+  readonly VITE_OWPENGRAM_SERVER?: string;
+  readonly VITE_OWPENGRAM_RSA_MODULUS?: string;
   // injected via `define` by vite.preview.config.ts; absent in every other build
   readonly VITE_PREVIEW?: boolean;
   // injected via `define` by vite.preview.config.ts when start-preview.sh is

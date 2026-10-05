@@ -23,6 +23,8 @@ import appNavigationController, {NavigationItem} from '@components/appNavigation
 import findUpClassName from '@helpers/dom/findUpClassName';
 import findUpTag from '@helpers/dom/findUpTag';
 import App from '@config/app';
+import {OWPENGRAM_REPO_URL} from '@config/owpengram';
+import {getProductName} from '@lib/owpengram/identity';
 import Modes from '@config/modes';
 import ButtonMenuToggle from '@components/buttonMenuToggle';
 import sessionStorage from '@lib/sessionStorage';
@@ -1815,7 +1817,7 @@ export default appSidebarLeft;
 
 function getVersionLink() {
   const btnMenuFooter = document.createElement('a');
-  btnMenuFooter.href = 'https://github.com/morethanwords/tweb/blob/master/CHANGELOG.md';
+  btnMenuFooter.href = OWPENGRAM_REPO_URL;
   setBlankToAnchor(btnMenuFooter);
   btnMenuFooter.classList.add('btn-menu-footer');
   btnMenuFooter.addEventListener(CLICK_EVENT_NAME, (e) => {
@@ -1824,7 +1826,7 @@ function getVersionLink() {
   });
   const t = document.createElement('span');
   t.classList.add('btn-menu-footer-text');
-  t.textContent = `Telegram Web${App.suffix} ${App.version} (${App.build})`;
+  t.textContent = `${getProductName()} Web ${App.suffix} ${App.version} (${App.build})`;
   btnMenuFooter.append(t);
 
   return btnMenuFooter;

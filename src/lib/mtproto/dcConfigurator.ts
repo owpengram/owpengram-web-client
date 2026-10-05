@@ -7,7 +7,7 @@
 
 import MTTransport, {MTConnectionConstructable} from '@lib/mtproto/transports/transport';
 import Modes from '@config/modes';
-import App from '@config/app';
+import {OWPENGRAM_SECURE, OWPENGRAM_SERVER} from '@config/owpengram';
 import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
 import HTTP from '@lib/mtproto/transports/http';
 import Socket from '@lib/mtproto/transports/websocket';
@@ -32,14 +32,14 @@ const PREMIUM_SUFFIX = '_premium';
 const RETRY_TIMEOUT_CLIENT = 3000;
 const RETRY_TIMEOUT_DOWNLOAD = 3000;
 
-export function getTelegramConnectionSuffix(connectionType: ConnectionType) {
-  return connectionType === 'client' ? '' : '-1';
-}
-
 // A dcId can arrive from the service worker's `stream/` route, i.e. from a URL any page
 // can craft: interpolated unchecked it turns the endpoint into an attacker-chosen host
 // (`1.evil.com/` -> wss://kws1.evil.com/-1.web.telegram.org/apiws). Telegram has exactly
 // five DCs, so validate here, before the value can reach a URL or a storage key.
+//
+// Still enforced even though the dcId no longer reaches the URL at all (every DC
+// resolves to OWPENGRAM_SERVER): it also keys stored auth keys, and the five-DC
+// range is what the rest of the client and the server's own dc_options assume.
 export function assertValidDcId(dcId: DcId): DcId {
   const id = +dcId;
   if(!Number.isInteger(id) || id < 1 || id > 5) {
@@ -54,30 +54,25 @@ export function constructTelegramWebSocketUrl(_dcId: DcId, connectionType: Conne
     return;
   }
 
-  const dcId = assertValidDcId(_dcId);
-  const suffix = getTelegramConnectionSuffix(connectionType);
-  const path = connectionType !== 'client' ? 'apiws' + TEST_SUFFIX + (premium ? PREMIUM_SUFFIX : '') : ('apiws' + TEST_SUFFIX);
-  const chosenServer = `wss://${App.suffix.toLowerCase()}ws${dcId}${suffix}.web.telegram.org/${path}`;
+  assertValidDcId(_dcId);
+  // No per-DC subdomain and no connection-type suffix in the host, unlike
+  // Telegram's `kws{dc}{-1}.web.telegram.org`: one server answers for every DC
+  // and every connection type. The path still varies, because that is what the
+  // server routes on -- its allowlist is exactly apiws{_test}{_premium}.
+  const path = 'apiws' + TEST_SUFFIX + (connectionType !== 'client' && premium ? PREMIUM_SUFFIX : '');
+  const chosenServer = `${OWPENGRAM_SECURE ? 'wss' : 'ws'}://${OWPENGRAM_SERVER}/${path}`;
 
   return chosenServer;
 }
 
 export class DcConfigurator {
-  private sslSubdomains = ['pluto', 'venus', 'aurora', 'vesta', 'flora'];
-
-  private dcOptions = Modes.test ?
-    [
-      {id: 1, host: '149.154.175.10',  port: 80},
-      {id: 2, host: '149.154.167.40',  port: 80},
-      {id: 3, host: '149.154.175.117', port: 80}
-    ] :
-    [
-      {id: 1, host: '149.154.175.50',  port: 80},
-      {id: 2, host: '149.154.167.50',  port: 80},
-      {id: 3, host: '149.154.175.100', port: 80},
-      {id: 4, host: '149.154.167.91',  port: 80},
-      {id: 5, host: '149.154.171.5',   port: 80}
-    ];
+  // Every DC is the same machine, so this replaces both Telegram's hardcoded
+  // DC IPs and the pluto/venus/... ssl subdomains the https transport derived
+  // its host from.
+  private dcOptions = (() => {
+    const [host, port] = OWPENGRAM_SERVER.split(':');
+    return [1, 2, 3, 4, 5].map((id) => ({id, host, port: +port || 80}));
+  })();
 
   public chosenServers: Servers = {} as any;
 
@@ -108,10 +103,8 @@ export class DcConfigurator {
 
     let chosenServer: string;
     if(Modes.ssl || !Modes.http) {
-      const suffix = getTelegramConnectionSuffix(connectionType);
-      const subdomain = this.sslSubdomains[dcId - 1] + suffix;
       const path = Modes.test ? 'apiw_test1' : 'apiw1';
-      chosenServer = 'https://' + subdomain + '.web.telegram.org/' + path;
+      chosenServer = (OWPENGRAM_SECURE ? 'https://' : 'http://') + OWPENGRAM_SERVER + '/' + path;
     } else {
       for(const dcOption of this.dcOptions) {
         if(dcOption.id === dcId) {

@@ -8,6 +8,8 @@ import MediaHeader from '@components/mediaHeader';
 import TelInputField from '@components/telInputField';
 import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
 import App from '@config/app';
+import classNames from '@helpers/string/classNames';
+import {getServerIconUrl} from '@lib/owpengram/identity';
 import cancelEvent from '@helpers/dom/cancelEvent';
 import focusWhenSettled from '@helpers/dom/focusWhenSettled';
 import placeCaretAtEnd from '@helpers/dom/placeCaretAtEnd';
@@ -37,6 +39,7 @@ type Spec = Extract<CardSpec, {name: 'signIn'}>;
  * cancelled on unmount via a local `cancelled` flag.
  */
 export default function SignInCard(_props: {spec: Spec}) {
+  const serverIconUrl = getServerIconUrl();
   const {managers, navigate, toIm} = useAuthFlow();
 
   let cancelled = false;
@@ -161,7 +164,11 @@ export default function SignInCard(_props: {spec: Spec}) {
         });
       }
 
-      const dcs = new Set([1, 2, 3, 4, 5]);
+      // Empty rather than [1..5]: owpengram-server is one machine answering for
+      // every DC id, so "pre-warming the other DCs" would open extra networkers
+      // to the same place and, worse, run a second key exchange per id against
+      // it while the login code request is still in flight.
+      const dcs = new Set<number>();
       const done: number[] = [nearestDcResult.this_dc];
 
       let promise: Promise<any>;
@@ -234,8 +241,8 @@ export default function SignInCard(_props: {spec: Spec}) {
             class={styles.logoContainer}
             size={120}
             element={
-              <svg class={styles.logo} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
-                <use href="#logo"/>
+              <svg class={classNames(styles.logo, serverIconUrl && styles.logoCustom)} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+                <image href={serverIconUrl || 'assets/img/logo_512.png'} width="160" height="160"/>
               </svg>
             }
           />

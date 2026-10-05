@@ -8,7 +8,11 @@
 import type {TrueDcId} from '@types';
 import langPackLocalVersion from '@/langPackLocalVersion';
 
-export const MAIN_DOMAINS = ['web.telegram.org', 'webk.telegram.org'];
+// Empty for a self-hosted build: nothing it is served from is an official
+// Telegram domain, so the "main domain" branch below -- which swaps in
+// Webogram's own api_id/hash and push key -- must never fire, whatever host
+// this ends up on.
+export const MAIN_DOMAINS: string[] = [];
 export const DEFAULT_BACKGROUND_SLUG = 'pattern';
 
 const threads = Math.min(4, navigator.hardwareConcurrency ?? 4);

@@ -7,6 +7,7 @@
 import '@helpers/dom/previewUnfreeze';
 import '@helpers/dom/previewRaf';
 import App from '@config/app';
+import {applyDocumentBranding, refreshServerIdentity} from '@lib/owpengram/identity';
 import blurActiveElement from '@helpers/dom/blurActiveElement';
 import {IS_STICKY_INPUT_BUGGED} from '@helpers/dom/fixSafariStickyInputFocusing';
 import loadFonts from '@helpers/dom/loadFonts';
@@ -126,7 +127,7 @@ async function checkLastActiveAccountFromTMe() {
 
 function setManifest() {
   const manifest = document.getElementById('manifest') as HTMLLinkElement;
-  if(manifest) manifest.href = `site${IS_APPLE && !IS_APPLE_MOBILE ? '_apple' : ''}.webmanifest?v=p9R6mT3xKv`;
+  if(manifest) manifest.href = `site${IS_APPLE && !IS_APPLE_MOBILE ? '_apple' : ''}.webmanifest?v=owpg1`;
 }
 
 function setViewportHeightListeners() {
@@ -429,6 +430,11 @@ if(import.meta.env.DEV) {
   toggleAttributePolyfill();
   replaceChildrenPolyfill();
   setManifest();
+  // * the tab title is saved by the notifications manager later on and restored after every unread
+  // * counter, so it is named after the server before that happens
+  applyDocumentBranding();
+  // * the server may have been renamed since the last visit; the new name applies from the next load
+  refreshServerIdentity();
   setViewportHeightListeners();
   setWorkerProxy; // * just to import
   listenForWindowPrint();

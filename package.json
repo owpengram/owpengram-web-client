@@ -6,6 +6,7 @@
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "start": "vite",
+    "owpengram": "node scripts/owpengram-web.mjs",
     "start-in-docker": "vite --host",
     "serve": "pnpm run build && node server.js --dist",
     "build": "pnpm test --run && pnpm run typecheck && pnpm run generate-changelog && vite build && pnpm run check-bundle",

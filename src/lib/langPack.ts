@@ -17,6 +17,7 @@ import {createSignal} from 'solid-js';
 import commonStateStorage from '@lib/commonStateStorage';
 import Icon from '@components/icon';
 import currencyStarIcon from '@components/currencyStarIcon';
+import {brandLangPackString} from '@lib/owpengram/brandText';
 
 export const langPack: {[actionType: string]: LangPackKey} = {
   'messageActionChatCreate': 'ActionCreateGroup',
@@ -191,22 +192,24 @@ namespace I18n {
     return rootScope.managers.appLangPackManager.getStrings(langCode, strings);
   }
 
+  // * these are the strings bundled with the client, which never pass through the server
+  // * that brands what it serves, so the product name is rewritten here instead
   export function formatLocalStrings(strings: any, pushTo: LangPackString[] = []) {
     for(const i in strings) {
       // @ts-ignore
       const v = strings[i];
       if(typeof(v) === 'string') {
-        pushTo.push({
+        pushTo.push(brandLangPackString({
           _: 'langPackString',
           key: i,
           value: v
-        });
+        }));
       } else {
-        pushTo.push({
+        pushTo.push(brandLangPackString({
           _: 'langPackStringPluralized',
           key: i,
           ...v
-        });
+        }));
       }
     }
 
