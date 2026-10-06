@@ -11,6 +11,11 @@
  *   node scripts/owpengram-web.mjs run --server 1.2.3.4:2398
  *   node scripts/owpengram-web.mjs build --fetch-key
  *   node scripts/owpengram-web.mjs build --fast          # skip tests/typecheck
+ *   node scripts/owpengram-web.mjs embed                 # build INTO owpengram-server
+ *
+ * `embed` is the build the server carries inside its binary and serves at its
+ * own address: it needs no server address and no key, because the page finds
+ * both from where it was served. Rebuild the server afterwards to pick it up.
  *
  * One implementation rather than a .ps1/.sh pair: Node and pnpm are already
  * required to build this client at all, so this runs everywhere it does.
@@ -20,8 +25,8 @@ import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline/promises';
 import {createPublicKey} from 'node:crypto';
 import {connect} from 'node:net';
-import {existsSync, readFileSync, writeFileSync} from 'node:fs';
-import {dirname, join} from 'node:path';
+import {cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -31,7 +36,7 @@ const SERVER_KEY = 'VITE_OWPENGRAM_SERVER';
 const MODULUS_KEY = 'VITE_OWPENGRAM_RSA_MODULUS';
 
 function parseArgs(argv) {
-  const options = {mode: '', server: '', fetchKey: false, fast: false};
+  const options = {mode: '', server: '', serverDir: '', fetchKey: false, fast: false};
   for(let i = 0; i < argv.length; ++i) {
     const arg = argv[i];
     switch(arg) {
@@ -42,6 +47,9 @@ function parseArgs(argv) {
       case 'build':
         options.mode = 'build';
         break;
+      case 'embed':
+        options.mode = 'embed';
+        break;
       case '--fetch-key':
         options.fetchKey = true;
         break;
@@ -51,6 +59,9 @@ function parseArgs(argv) {
       case '--server':
         options.server = argv[++i] || '';
         break;
+      case '--server-dir':
+        options.serverDir = argv[++i] || '';
+        break;
       case '--help':
       case '-h':
         options.help = true;
@@ -58,6 +69,8 @@ function parseArgs(argv) {
       default:
         if(arg.startsWith('--server=')) {
           options.server = arg.slice('--server='.length);
+        } else if(arg.startsWith('--server-dir=')) {
+          options.serverDir = arg.slice('--server-dir='.length);
         } else {
           throw new Error(`unknown argument ${arg}`);
         }
@@ -70,7 +83,13 @@ function usage() {
   console.log(`owpengram-web -- run or build the client against owpengram-server
 
 Usage:
-  node scripts/owpengram-web.mjs [run|build] [options]
+  node scripts/owpengram-web.mjs [run|build|embed] [options]
+
+  embed  Build the client for owpengram-server to carry inside its binary and
+         serve at its own address, and copy it into the server checkout. No
+         --server / --fetch-key: the page finds the server and its key itself.
+         Rebuild the server afterwards. Skips the tests and typecheck, like
+         build --fast.
 
 Options:
   --server <host:port>  Server to talk to (default ${DEFAULT_SERVER}, asked when
@@ -81,6 +100,8 @@ Options:
                         the one compiled into src/config/owpengram.ts.
   --fast                Build with vite only, skipping the tests, typecheck and
                         bundle check that \`pnpm run build\` also runs.
+  --server-dir <path>   embed: the owpengram-server checkout to copy the build
+                        into (default ../owpengram-server).
 `);
 }
 
@@ -168,6 +189,54 @@ function nodeSatisfies(range) {
 
 const DEV_PORT = 8080;
 const VITE_BIN = join('node_modules', 'vite', 'bin', 'vite.js');
+const DIST = join(ROOT, 'dist');
+const PUBLIC = join(ROOT, 'public');
+
+/**
+ * Whether a file in public/ is a leftover of an old build rather than a static
+ * file the client needs. public/ holds both: its assets/, changelogs/, manifests
+ * and recorder workers are sources that `vite build` does not copy into dist/
+ * (copyPublicDir is off), next to hundreds of hashed bundles upstream committed
+ * from earlier builds -- which would otherwise be embedded too.
+ */
+function isStaleBuildArtifact(name) {
+  return name === 'index.html' || name === 'snapshot.html' ||
+    /\.map$/.test(name) ||
+    /-[A-Za-z0-9_-]{8}\.(js|css|wasm|woff2|svg)$/.test(name);
+}
+
+/**
+ * Puts the build where owpengram-server embeds it from: dist/ plus the static
+ * files the build does not carry, replacing whatever was there.
+ */
+function copyBuildIntoServer(serverDir) {
+  const webclient = join(serverDir, 'internal', 'webclient');
+  if(!existsSync(webclient)) {
+    throw new Error(`${serverDir} is not an owpengram-server checkout (no internal/webclient). Pass --server-dir.`);
+  }
+
+  const target = join(webclient, 'dist');
+  for(const name of existsSync(target) ? readdirSync(target) : []) {
+    // The placeholder is what lets the server compile without any build
+    if(name !== '.gitkeep') {
+      rmSync(join(target, name), {recursive: true, force: true});
+    }
+  }
+
+  cpSync(DIST, target, {recursive: true});
+
+  let copied = 0;
+  for(const name of readdirSync(PUBLIC)) {
+    if(isStaleBuildArtifact(name) || existsSync(join(target, name))) {
+      continue;
+    }
+
+    cpSync(join(PUBLIC, name), join(target, name), {recursive: true});
+    ++copied;
+  }
+
+  return {target, copied};
+}
 
 /**
  * Whether something already accepts connections on the dev port, on either
@@ -189,14 +258,14 @@ function isPortInUse(port) {
   return Promise.all([probe('::1'), probe('127.0.0.1')]).then((results) => results.some(Boolean));
 }
 
-function run(command, args) {
+function run(command, args, env) {
   return new Promise((resolve, reject) => {
     // One command string rather than an args array: a shell is needed at all
     // because pnpm is a .cmd shim on Windows that spawn cannot execute
     // directly, and passing args alongside shell: true is deprecated (DEP0190)
     // precisely because they would go through the shell unescaped. Everything
     // interpolated here is a literal from the call sites below.
-    const child = spawn([command, ...args].join(' '), {cwd: ROOT, stdio: 'inherit', shell: true});
+    const child = spawn([command, ...args].join(' '), {cwd: ROOT, stdio: 'inherit', shell: true, env: {...process.env, ...env}});
     child.on('error', reject);
     child.on('exit', (code) => {
       if(code === 0) resolve();
@@ -231,20 +300,21 @@ async function main() {
     server = process.env.VITE_OWPENGRAM_SERVER || '';
   }
 
-  if(interactive && (!mode || !server)) {
+  if(interactive && (!mode || (mode !== 'embed' && !server))) {
     const rl = createInterface({input: process.stdin, output: process.stdout});
     try {
       if(!mode) {
         console.log('\n  What to do:');
         console.log('    [1] run   - dev server on :8080');
-        console.log('    [2] build - production build into dist/\n');
+        console.log('    [2] build - production build into dist/');
+        console.log('    [3] embed - build into owpengram-server, served by it\n');
         let answer = '';
-        while(answer !== '1' && answer !== '2') {
-          answer = (await rl.question('  Choice [1/2]: ')).trim();
+        while(answer !== '1' && answer !== '2' && answer !== '3') {
+          answer = (await rl.question('  Choice [1/2/3]: ')).trim();
         }
-        mode = answer === '1' ? 'run' : 'build';
+        mode = answer === '1' ? 'run' : answer === '2' ? 'build' : 'embed';
       }
-      if(!server) {
+      if(mode !== 'embed' && !server) {
         const answer = (await rl.question(`  owpengram-server address [${DEFAULT_SERVER}]: `)).trim();
         server = answer || DEFAULT_SERVER;
       }
@@ -256,14 +326,18 @@ async function main() {
   mode ||= 'run';
   server ||= DEFAULT_SERVER;
 
-  const values = {[SERVER_KEY]: server};
-  if(options.fetchKey) {
-    console.log(`[..] reading the server's RSA key from ${server}`);
-    values[MODULUS_KEY] = await fetchServerModulus(server);
-    console.log('[ok] key pinned in .env.local');
+  // An embedded build is told nothing about a server: .env.local is left alone
+  // so a dev checkout's pinned address and key survive building it
+  if(mode !== 'embed') {
+    const values = {[SERVER_KEY]: server};
+    if(options.fetchKey) {
+      console.log(`[..] reading the server's RSA key from ${server}`);
+      values[MODULUS_KEY] = await fetchServerModulus(server);
+      console.log('[ok] key pinned in .env.local');
+    }
+    writeEnvLocal(values);
+    console.log(`[ok] ${SERVER_KEY}=${server} (.env.local)`);
   }
-  writeEnvLocal(values);
-  console.log(`[ok] ${SERVER_KEY}=${server} (.env.local)`);
 
   if(!existsSync(join(ROOT, 'node_modules'))) {
     console.log('[..] installing dependencies');
@@ -282,6 +356,16 @@ async function main() {
     // switches to the version package.json pins, and that step can stall with
     // no output at all, so the dev server looks hung before it ever starts
     await run('node', [VITE_BIN]);
+  } else if(mode === 'embed') {
+    const serverDir = resolve(ROOT, options.serverDir || join('..', 'owpengram-server'));
+    console.log('[..] building the embedded client with vite only (tests and typecheck skipped)\n');
+    // No source maps: they are 2.5x the size of the app itself and would be
+    // compiled into the server binary for nobody to open
+    await run('node', [VITE_BIN, 'build', '--sourcemap', 'false'], {VITE_OWPENGRAM_EMBEDDED: 'true'});
+
+    const {target, copied} = copyBuildIntoServer(serverDir);
+    console.log(`\n[ok] copied into ${target} (+${copied} static entries from public/)`);
+    console.log('     rebuild the server to embed it: telesrv-ctl restart');
   } else if(options.fast) {
     console.log('[..] building with vite only (tests and typecheck skipped)\n');
     await run('node', [VITE_BIN, 'build']);

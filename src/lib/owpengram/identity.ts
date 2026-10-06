@@ -1,4 +1,4 @@
-import {OWPENGRAM_SECURE, OWPENGRAM_SERVER} from '@config/owpengram';
+import {OWPENGRAM_SERVER_URL} from '@config/owpengram';
 
 /**
  * What the server says it is called, and whether it has an icon. Read from the
@@ -9,7 +9,9 @@ import {OWPENGRAM_SECURE, OWPENGRAM_SERVER} from '@config/owpengram';
  * Only cosmetic fields are ever taken from that endpoint. It is plain HTTP, so
  * trusting anything more -- the RSA key it also carries, above all -- would let
  * whoever can tamper with it redirect the handshake; a wrong name is merely
- * wrong. The key stays pinned at build time (see @config/owpengram).
+ * wrong. The key stays pinned at build time (see @config/owpengram), except in
+ * the build embedded in the server, which reads it from the server that served
+ * the page (see lib/owpengram/serverKey).
  */
 export type ServerIdentity = {
   name: string,
@@ -22,9 +24,8 @@ export const DEFAULT_PRODUCT_NAME = 'OwpenGram';
 const STORAGE_KEY = 'owpengram_server_identity';
 const MAX_NAME_LENGTH = 64; // the server rejects longer names too
 
-const SERVER_URL = `${OWPENGRAM_SECURE ? 'https' : 'http'}://${OWPENGRAM_SERVER}`;
-const SERVER_INFO_URL = SERVER_URL + '/owpengram/server-info';
-const SERVER_ICON_URL = SERVER_URL + '/owpengram/server-icon';
+const SERVER_INFO_URL = OWPENGRAM_SERVER_URL + '/owpengram/server-info';
+const SERVER_ICON_URL = OWPENGRAM_SERVER_URL + '/owpengram/server-icon';
 
 let identity: ServerIdentity;
 
@@ -60,6 +61,75 @@ export function applyDocumentBranding() {
   for(const name of ['application-name', 'apple-mobile-web-app-title', 'mobile-web-app-title']) {
     document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.setAttribute('content', title);
   }
+
+  applyDocumentIcon();
+}
+
+/**
+ * Puts the server's icon in the tab. The bundled mark stays when the server has
+ * none. `sizes` and `type` are dropped because they describe the bundled PNGs:
+ * the server's icon can be any size and format, and a wrong hint makes the
+ * browser skip it.
+ *
+ * Changes the `href` in place rather than replacing the elements, which is what
+ * the unread-badge code (uiNotificationsManager) holds on to and restores.
+ */
+function applyDocumentIcon(url = getServerIconUrl()) {
+  if(!url) {
+    return;
+  }
+
+  // `alternate icon` too: it is the bundled favicon.ico, and a browser that
+  // prefers it keeps showing the bundled mark however the others are changed
+  const links = document.head.querySelectorAll<HTMLLinkElement>('link[rel="icon"], link[rel="alternate icon"], link[rel="apple-touch-icon"]');
+  const setHref = (href: string) => links.forEach((link) => link.href = href);
+  for(const link of links) {
+    link.removeAttribute('sizes');
+    link.removeAttribute('type');
+  }
+
+  // The raw image first: it is what stays if the rounded one cannot be made
+  setHref(url);
+  roundIcon(url).then(setHref, () => {});
+}
+
+let iconRequest = 0;
+
+/**
+ * The icon with a circular mask baked into its pixels. A browser draws a
+ * favicon as it is and ignores CSS, so an icon with square corners (the server
+ * serves whatever image the operator uploaded, often a round mark on a white
+ * square) would show square in the tab. The admin panel does the same, so the
+ * tab matches the round mark used everywhere else.
+ *
+ * Rejects when the image or a canvas is unavailable. Only the latest request
+ * resolves, so a slow image cannot overwrite a newer one.
+ */
+function roundIcon(url: string, size = 64) {
+  const request = ++iconRequest;
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image();
+    // The server allows cross-origin reads of its icon, which the canvas needs
+    // when the page is served from somewhere else (the dev server)
+    image.crossOrigin = 'anonymous';
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const context = canvas.getContext('2d');
+      if(!context || request !== iconRequest) {
+        reject();
+        return;
+      }
+
+      context.beginPath();
+      context.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      context.clip();
+      context.drawImage(image, 0, 0, size, size);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    image.onerror = () => reject();
+    image.src = url;
+  });
 }
 
 /** The server's icon, or undefined when it has none and the bundled mark applies. */
@@ -94,5 +164,11 @@ export async function refreshServerIdentity() {
     }
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+
+    // The one thing applied right away: a tab icon that is wrong until the
+    // next load would be the first thing a new visitor sees
+    if(next.hasIcon !== !!previous?.hasIcon) {
+      applyDocumentIcon(next.hasIcon ? SERVER_ICON_URL : undefined);
+    }
   } catch{}
 }

@@ -10,6 +10,14 @@
  */
 
 /**
+ * Whether this build is the one embedded in owpengram-server, which serves
+ * the page itself (`node scripts/owpengram-web.mjs embed`). It then needs
+ * nothing configured: the server is whoever served the page, and the RSA key
+ * is read from that server when the client starts (see OWPENGRAM_RSA_MODULUS).
+ */
+export const OWPENGRAM_EMBEDDED = import.meta.env.VITE_OWPENGRAM_EMBEDDED === 'true';
+
+/**
  * The one address of the whole backend.
  *
  * owpengram-server serves MTProto over TCP and MTProto-over-WebSocket
@@ -17,8 +25,13 @@
  * address to derive -- DC ids 1..5 all resolve here, which is what the
  * desktop and Android forks do too (and why the server ships with
  * TELESRV_STRICT_DC_CHECK off).
+ *
+ * `location.host` also in a worker: a worker's location is its script's URL,
+ * which is the server's own origin.
  */
-export const OWPENGRAM_SERVER = import.meta.env.VITE_OWPENGRAM_SERVER || '127.0.0.1:2398';
+export const OWPENGRAM_SERVER = OWPENGRAM_EMBEDDED ?
+  location.host :
+  import.meta.env.VITE_OWPENGRAM_SERVER || '127.0.0.1:2398';
 
 /**
  * Follows the page's own protocol rather than being configurable: a browser
@@ -28,15 +41,24 @@ export const OWPENGRAM_SERVER = import.meta.env.VITE_OWPENGRAM_SERVER || '127.0.
  */
 export const OWPENGRAM_SECURE = location.protocol === 'https:';
 
+/** Base of the server's plain HTTP side: `/owpengram/server-info`, `/owpengram/server-icon`. */
+export const OWPENGRAM_SERVER_URL = `${OWPENGRAM_SECURE ? 'https' : 'http'}://${OWPENGRAM_SERVER}`;
+
 /**
  * The server's RSA public key, as the modulus/exponent pair rsaKeysManager
  * derives a fingerprint from.
  *
- * Baked in at build time on purpose. The server does expose its own key at
+ * Baked in at build time on purpose, for a client served from somewhere else
+ * (the dev server, a CDN). The server does expose its own key at
  * `GET /owpengram/server-info`, but that endpoint is plain HTTP, so trusting
  * it at runtime would let anything able to MITM it substitute a key and read
  * the handshake -- the same reason the server's identity refresh deliberately
  * applies only name/description/icon from there and never the key.
+ *
+ * The embedded build (OWPENGRAM_EMBEDDED) does read it at runtime, and that is
+ * no weaker: the page, and with it every line of this code, came from that same
+ * server over that same connection, so anyone able to substitute the key could
+ * as well have substituted the page. Over https neither can be tampered with.
  *
  * Re-derive after regenerating the server's key (data/server_rsa.pem):
  *   curl -s http://<server>/owpengram/server-info

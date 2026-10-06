@@ -7,7 +7,8 @@
 
 import {TLSerialization} from '@lib/mtproto/tl_utils';
 import cryptoWorker from '@lib/crypto/cryptoMessagePort';
-import {OWPENGRAM_RSA_EXPONENT, OWPENGRAM_RSA_MODULUS} from '@config/owpengram';
+import {OWPENGRAM_EMBEDDED, OWPENGRAM_RSA_EXPONENT, OWPENGRAM_RSA_MODULUS} from '@config/owpengram';
+import {fetchServerRsaKey} from '@lib/owpengram/serverKey';
 import bytesFromHex from '@helpers/bytes/bytesFromHex';
 import bytesToHex from '@helpers/bytes/bytesToHex';
 import bigInt from 'big-integer';
@@ -29,12 +30,19 @@ export class RSAKeysManager {
    * (apiws_test), not which machine answers.
    *
    * See @config/owpengram for where the value comes from and how to re-derive
-   * it after regenerating the server's key.
+   * it after regenerating the server's key. The build embedded in the server
+   * asks the server for it instead.
    */
-  private owpengramKeysHex: RSAPublicKeyHex[] = [{
-    modulus: OWPENGRAM_RSA_MODULUS,
-    exponent: OWPENGRAM_RSA_EXPONENT
-  }];
+  private getOwpengramKeysHex(): Promise<RSAPublicKeyHex[]> {
+    if(OWPENGRAM_EMBEDDED) {
+      return fetchServerRsaKey().then((key) => [key]);
+    }
+
+    return Promise.resolve([{
+      modulus: OWPENGRAM_RSA_MODULUS,
+      exponent: OWPENGRAM_RSA_EXPONENT
+    }]);
+  }
 
   /**
    *  Server public key, obtained from here: https://core.telegram.org/api/obtaining_api_id
@@ -102,7 +110,7 @@ export class RSAKeysManager {
       return Promise.resolve();
     }
 
-    return this.preparePromise = Promise.all(this.owpengramKeysHex.map((keyParsed) => {
+    return this.preparePromise = this.getOwpengramKeysHex().then((keys) => Promise.all(keys.map((keyParsed) => {
       const RSAPublicKey = new TLSerialization();
       RSAPublicKey.storeBytes(bytesFromHex(keyParsed.modulus), 'n');
       RSAPublicKey.storeBytes(bytesFromHex(keyParsed.exponent), 'e');
@@ -118,11 +126,16 @@ export class RSAKeysManager {
           exponent: keyParsed.exponent
         };
       });
-    })).then(() => {
+    }))).then(() => {
       this.prepared = true;
 
       // console.log('[MT] Prepared keys');
       this.preparePromise = null;
+    }, (err) => {
+      // Not kept: a server that was unreachable once must be asked again on
+      // the next attempt, not answered with the same failure for good
+      this.preparePromise = null;
+      throw err;
     });
   }
 

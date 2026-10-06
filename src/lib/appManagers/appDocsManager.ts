@@ -268,7 +268,10 @@ export class AppDocsManager extends AppManager {
       doc.type = 'pdf';
     } else if(doc.mime_type === EXTENSION_MIME_TYPE_MAP.gif) {
       doc.type = 'gif';
-    } else if(doc.mime_type === EXTENSION_MIME_TYPE_MAP.tgs && doc.file_name === 'AnimatedSticker.tgs') {
+    } else if(doc.mime_type === EXTENSION_MIME_TYPE_MAP.tgs && (doc.file_name === 'AnimatedSticker.tgs' || doc.attributes.some((attribute) => attribute._ === 'documentAttributeSticker'))) {
+      // Telegram names every animated sticker AnimatedSticker.tgs, but that is
+      // only a convention: the server's own documents (star gifts) are named
+      // otherwise, and left as plain photos their animation JSON ends up in an <img>
       doc.type = 'sticker';
       doc.animated = true;
       doc.sticker = StickerType.Lottie;
