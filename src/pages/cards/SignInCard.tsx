@@ -2,6 +2,7 @@ import {createSignal, JSX, onCleanup, onMount} from 'solid-js';
 
 import Button from '@components/buttonTsx';
 import CountryInputField from '@components/countryInputField';
+import InputField from '@components/inputField';
 import LanguageChangeButton from '@components/languageChangeButton';
 import PasskeyLoginButton from '@components/passkeyLoginButton';
 import MediaHeader from '@components/mediaHeader';
@@ -10,6 +11,7 @@ import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
 import App from '@config/app';
 import classNames from '@helpers/string/classNames';
 import {getServerIconUrl} from '@lib/owpengram/identity';
+import {encodeEmailPhone} from '@lib/owpengram/emailSignupPhone';
 import cancelEvent from '@helpers/dom/cancelEvent';
 import focusWhenSettled from '@helpers/dom/focusWhenSettled';
 import placeCaretAtEnd from '@helpers/dom/placeCaretAtEnd';
@@ -37,6 +39,11 @@ type Spec = Extract<CardSpec, {name: 'signIn'}>;
  * password (passkey path). Also exposes a QR-login button and the passkey
  * button. On mount kicks off `tryAgain()` — a DC pre-warming cascade — that's
  * cancelled on unmount via a local `cancelled` flag.
+ *
+ * A server with email sign-up (`email_signup_enabled` in its app config) has no
+ * SMS, so there the card asks for an email address instead, which goes out as a
+ * synthetic phone number (see @lib/owpengram/emailSignupPhone). Phone sign-in
+ * stays one tap away.
  */
 export default function SignInCard(_props: {spec: Spec}) {
   const serverIconUrl = getServerIconUrl();
@@ -54,6 +61,9 @@ export default function SignInCard(_props: {spec: Spec}) {
 
   let lastCountrySelected: HelpCountry | undefined;
   let lastCountryCodeSelected: HelpCountryCode | undefined;
+  // whether the phone field holds a number worth sending, kept apart from
+  // `hasValidInput` because that follows whichever field is on screen
+  let phoneValid = false;
   // True while we're mirroring a phone-driven country detection into the country
   // selector. In that case the phone field is the source of truth and must NOT be
   // reset to the bare '+code' (that would wipe a just-typed/pasted national number).
@@ -93,7 +103,8 @@ export default function SignInCard(_props: {spec: Spec}) {
         overriding = false;
       }
 
-      setHasValidInput(!!(country || (telInputField.value.length - 1) > 1));
+      phoneValid = !!(country || (telInputField.value.length - 1) > 1);
+      if(!emailMode()) setHasValidInput(phoneValid);
     }
   });
 
@@ -105,6 +116,53 @@ export default function SignInCard(_props: {spec: Spec}) {
       return onSubmit();
     }
   });
+
+  /* ---------- email sign-up ---------- */
+
+  // whether this server takes an email address at all, and whether the card is asking for one
+  const [emailSignup, setEmailSignup] = createSignal(false);
+  const [emailMode, setEmailMode] = createSignal(false);
+
+  const emailField = new InputField({
+    label: 'Login.EmailLabel',
+    name: 'email',
+    plainText: true
+  });
+
+  const emailEl = emailField.input;
+  emailEl.setAttribute('role', 'textbox');
+  emailEl.setAttribute('aria-multiline', 'false');
+  emailEl.setAttribute('autocapitalize', 'off');
+  emailEl.setAttribute('spellcheck', 'false');
+  emailEl.inputMode = 'email';
+  if(emailEl instanceof HTMLInputElement) {
+    emailEl.type = 'email';
+    emailEl.autocomplete = 'email';
+  }
+
+  const isEmailValid = () => encodeEmailPhone(emailField.value) !== undefined;
+
+  emailEl.addEventListener('input', () => {
+    emailEl.classList.remove('error');
+    emailField.setLabel();
+    setHasValidInput(isEmailValid());
+  });
+  emailEl.addEventListener('keypress', (e) => {
+    if(hasValidInput() && !submitting() && e.key === 'Enter') {
+      return onSubmit();
+    }
+  });
+
+  /** The field in use, and whether what it holds can be sent. */
+  const activeInput = () => emailMode() ? emailEl : telEl;
+
+  function switchLoginMethod() {
+    setEmailMode(!emailMode());
+    setHasValidInput(emailMode() ? isEmailValid() : phoneValid);
+    if(!IS_TOUCH_SUPPORTED) {
+      focusWhenSettled(activeInput(), () => !cancelled);
+    }
+  }
 
   /* ---------- submit ---------- */
 
@@ -121,7 +179,8 @@ export default function SignInCard(_props: {spec: Spec}) {
       </>
     );
 
-    const phone_number = telInputField.value;
+    // an email address is sent as a synthetic phone number the server can decode
+    const phone_number = emailMode() ? encodeEmailPhone(emailField.value) : telInputField.value;
     managers.apiManager.invokeApi('auth.sendCode', {
       phone_number,
       api_id: App.id,
@@ -138,9 +197,13 @@ export default function SignInCard(_props: {spec: Spec}) {
 
       switch(err.type) {
         case 'PHONE_NUMBER_INVALID':
-          telInputField.setError();
-          replaceContent(telInputField.label, i18n('Login.PhoneLabelInvalid'));
-          telEl.classList.add('error');
+          if(emailMode()) {
+            emailField.setError('Login.EmailLabelInvalid');
+          } else {
+            telInputField.setError();
+            replaceContent(telInputField.label, i18n('Login.PhoneLabelInvalid'));
+            telEl.classList.add('error');
+          }
           setNextContent(i18n('Login.Next'));
           break;
         default:
@@ -224,6 +287,20 @@ export default function SignInCard(_props: {spec: Spec}) {
     }
 
     tryAgain();
+
+    // `true`: a config cached from before the server turned this on would hide
+    // the field for up to a day, and this card is the only place that asks.
+    // Until the answer comes the phone form is what is shown.
+    managers.apiManager.getAppConfig(true).then((appConfig) => {
+      if(cancelled || !appConfig?.email_signup_enabled) return;
+
+      setEmailSignup(true);
+      // do not take the card out from under someone who already typed a number; the
+      // country code the field is pre-filled with does not count as one
+      if(!phoneValid) {
+        switchLoginMethod();
+      }
+    }, () => {});
   });
 
   onCleanup(() => {
@@ -247,14 +324,13 @@ export default function SignInCard(_props: {spec: Spec}) {
             }
           />
           <MediaHeader.Title tag="h1">{i18n('Login.Title')}</MediaHeader.Title>
-          <MediaHeader.Subtitle class="secondary">{i18n('Login.StartText')}</MediaHeader.Subtitle>
+          <MediaHeader.Subtitle class="secondary">{i18n(emailMode() ? 'Login.Email.StartText' : 'Login.StartText')}</MediaHeader.Subtitle>
         </MediaHeader>
       }
       inputWrapper={false}
     >
       <div class="input-wrapper">
-        {countryInputField.container}
-        {telInputField.container}
+        {emailMode() ? emailField.container : <>{countryInputField.container}{telInputField.container}</>}
         <Button
           class="btn-primary btn-color-primary"
           disabled={!hasValidInput() || submitting()}
@@ -264,6 +340,15 @@ export default function SignInCard(_props: {spec: Spec}) {
         </Button>
         {getCurrentAccount() === 1 && <LanguageChangeButton />}
       </div>
+      {emailSignup() && (
+        <Button
+          class="btn-primary btn-secondary btn-primary-transparent primary"
+          disabled={submitting()}
+          onClick={switchLoginMethod}
+        >
+          {i18n(emailMode() ? 'Login.UsePhone' : 'Login.UseEmail')}
+        </Button>
+      )}
       <Button
         class="btn-primary btn-secondary btn-primary-transparent primary"
         disabled={submitting()}

@@ -28,6 +28,7 @@ import lottieLoader from '@lib/lottie/lottieLoader';
 import LottiePlayer from '@lib/lottie/lottiePlayer';
 import ctx from '@environment/ctx';
 import Modes from '@config/modes';
+import {getPhoneForDisplay} from '@lib/owpengram/emailSignupPhone';
 
 import AuthCard from '@/pages/AuthCard';
 import AuthCardError from '@/pages/AuthCardError';
@@ -491,7 +492,8 @@ export default function AuthCodeCard(props: {spec: Spec}) {
     rebuildInput();
     if(isOnScreen) fastRaf(() => activeInput()?.focus());
 
-    phoneEl.innerText = sentCode.phone_number ?? '';
+    // an address that was sent as a synthetic number is shown as the address
+    phoneEl.innerText = getPhoneForDisplay(sentCode.phone_number ?? '');
     setErrorContent(undefined);
     setSubmitting(false);
 
