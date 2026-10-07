@@ -32,7 +32,11 @@ export interface MTAppConfig {
   ringtone_saved_count_max?:                 number;
   premium_purchase_blocked?:                 boolean;
   /** owpengram-server: logging in with an email address instead of a phone number. */
-  email_signup_enabled?:                     boolean;
+  email_signup_enabled?:                     boolean,
+  /** owpengram-server: allow login with email for existing accounts. */
+  login_email_enabled?:                      boolean,
+  /** owpengram-server: require login email setup before signing in. */
+  login_email_require_setup?:                boolean,
   channels_limit_default?:                   number;
   channels_limit_premium?:                   number;
   saved_gifs_limit_default?:                 number;

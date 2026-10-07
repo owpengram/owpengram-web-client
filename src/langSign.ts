@@ -8,6 +8,9 @@ const lang = {
   'Login.EmailLabelInvalid': 'Email Invalid',
   'Login.UseEmail': 'Log in by Email',
   'Login.UsePhone': 'Log in by Phone Number',
+  'Login.PhoneFallback.Title': 'Log in with a phone number?',
+  'Login.PhoneFallback.Text': 'Even if you log in with a phone number, you\'ll still need to link an email to your account right after — this server cannot deliver a real SMS code.\n\nUsing your real phone number here is not recommended for privacy.\n\nOnly use this if you already had an account on this server before email sign-up was turned on.',
+  'Login.PhoneFallback.Confirm': 'Use phone number',
   'Login.Code.SentSms': 'We have sent you an SMS\nwith the code.',
   'Login.Code.SentInApp': 'We have sent you a message in Telegram\nwith the code.',
   'Login.Code.SentCall': 'We will call you and dictate\nthe code.',
@@ -76,6 +79,7 @@ const lang = {
   'Login.QR.Help2': 'Go to **Settings** > **Devices** > **Add Device**',
   'Login.QR.Help3': 'Point your phone at this screen to confirm login',
   'Login.QR.Cancel': 'Log in by phone number >',
+  'Login.QR.CancelEmail': 'Log in by email >',
   'Login.QR.Login': 'Log in by QR Code >',
   'Login.QR.Subtitle': 'Scan with Telegram app on your phone',
   // the link target stays empty on purpose: tweb's formatter takes the anchor from the arguments

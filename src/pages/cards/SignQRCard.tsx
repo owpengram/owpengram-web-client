@@ -1,4 +1,4 @@
-import {onCleanup, onMount} from 'solid-js';
+import {createSignal, onCleanup, onMount} from 'solid-js';
 
 import Button from '@components/buttonTsx';
 import LanguageChangeButton from '@components/languageChangeButton';
@@ -18,6 +18,7 @@ import {LangPackKey, i18n} from '@lib/langPack';
 import AccountController from '@lib/accounts/accountController';
 import {getCurrentAccount} from '@lib/accounts/getCurrentAccount';
 import rootScope from '@lib/rootScope';
+import {fetchLoginAppConfig, readStoredEmailSignup} from '@lib/owpengram/emailSignupSetting';
 
 import AuthCard from '@/pages/AuthCard';
 import {CardSpec, useAuthFlow} from '@/pages/authFlow';
@@ -38,6 +39,10 @@ const QR_SIZE = 240;
  */
 export default function SignQRCard(_props: {spec: Spec}) {
   const {managers, navigate, toIm} = useAuthFlow();
+
+  // the other way in is by email on a server with email sign-up, so the button
+  // leading there says so
+  const [emailSignup, setEmailSignup] = createSignal(readStoredEmailSignup());
 
   // Persistent host for the QR canvas (qr-code-styling injects its canvas
   // into this div). We hand it to <MediaHeader.Sticker element={...}>.
@@ -196,6 +201,10 @@ export default function SignQRCard(_props: {spec: Spec}) {
   onMount(async() => {
     managers.appStateManager.pushToState('authState', {_: 'authStateSignQr'});
 
+    fetchLoginAppConfig(managers).then((appConfig) => {
+      if(!stopped && appConfig) setEmailSignup(!!appConfig.email_signup_enabled);
+    });
+
     preloader = putPreloader(stickerHost, true);
 
     const [{default: QRCodeStyling}] = await Promise.all([
@@ -242,8 +251,9 @@ export default function SignQRCard(_props: {spec: Spec}) {
           stopped = true;
           navigate({name: 'signIn'});
         }}
-        text="Login.QR.Cancel"
-      />
+      >
+        {i18n(emailSignup() ? 'Login.QR.CancelEmail' : 'Login.QR.Cancel')}
+      </Button>
       {getCurrentAccount() === 1 && <LanguageChangeButton />}
       <PasskeyLoginButton />
     </AuthCard>

@@ -1,6 +1,7 @@
 import {createSignal, JSX, onCleanup, onMount} from 'solid-js';
 
 import Button from '@components/buttonTsx';
+import confirmationPopup from '@components/confirmationPopup';
 import CountryInputField from '@components/countryInputField';
 import InputField from '@components/inputField';
 import LanguageChangeButton from '@components/languageChangeButton';
@@ -12,6 +13,12 @@ import App from '@config/app';
 import classNames from '@helpers/string/classNames';
 import {getServerIconUrl} from '@lib/owpengram/identity';
 import {encodeEmailPhone} from '@lib/owpengram/emailSignupPhone';
+import {
+  fetchLoginAppConfig,
+  isPhoneFallbackChosen,
+  readStoredEmailSignup,
+  setPhoneFallbackChosen
+} from '@lib/owpengram/emailSignupSetting';
 import cancelEvent from '@helpers/dom/cancelEvent';
 import focusWhenSettled from '@helpers/dom/focusWhenSettled';
 import placeCaretAtEnd from '@helpers/dom/placeCaretAtEnd';
@@ -44,6 +51,14 @@ type Spec = Extract<CardSpec, {name: 'signIn'}>;
  * SMS, so there the card asks for an email address instead, which goes out as a
  * synthetic phone number (see @lib/owpengram/emailSignupPhone). Phone sign-in
  * stays one tap away.
+ *
+ * A server with `login_email_enabled` allows logging in with an email address
+ * for existing accounts (in addition to phone). The card shows a "Log in by Email"
+ * button to switch modes.
+ *
+ * A server with `login_email_require_setup` requires a login email to be set up
+ * before signing in. The server will return `auth.sentCodeTypeSetUpEmailRequired`
+ * which routes to the emailSetup cards.
  */
 export default function SignInCard(_props: {spec: Spec}) {
   const serverIconUrl = getServerIconUrl();
@@ -117,11 +132,27 @@ export default function SignInCard(_props: {spec: Spec}) {
     }
   });
 
-  /* ---------- email sign-up ---------- */
+  /* ---------- email sign-up / login ---------- */
 
-  // whether this server takes an email address at all, and whether the card is asking for one
-  const [emailSignup, setEmailSignup] = createSignal(false);
-  const [emailMode, setEmailMode] = createSignal(false);
+  // Whether this server takes an email address at all, and whether the card is
+  // asking for one. A server with email sign-up is asked by email by default, so
+  // the last answer is remembered and the card opens on the right form at once
+  // instead of showing the phone form until the server has been heard from.
+  const storedEmailSignup = readStoredEmailSignup();
+  const [emailSignup, setEmailSignup] = createSignal(storedEmailSignup);
+  const [loginEmailEnabled, setLoginEmailEnabled] = createSignal(false);
+  const [emailMode, setEmailMode] = createSignal(storedEmailSignup && !isPhoneFallbackChosen());
+
+  // Set once the person types into the phone field themselves. Filling in the
+  // country code (which arrives on its own, at an unpredictable moment) does not
+  // count -- that race is what used to flip the card between phone and email.
+  let phoneTouched = false;
+  telEl.addEventListener('input', (e) => {
+    if(e.isTrusted) phoneTouched = true;
+  });
+
+  // true if either email signup or email login is enabled
+  const emailAvailable = () => emailSignup() || loginEmailEnabled();
 
   const emailField = new InputField({
     label: 'Login.EmailLabel',
@@ -156,12 +187,34 @@ export default function SignInCard(_props: {spec: Spec}) {
   /** The field in use, and whether what it holds can be sent. */
   const activeInput = () => emailMode() ? emailEl : telEl;
 
-  function switchLoginMethod() {
-    setEmailMode(!emailMode());
-    setHasValidInput(emailMode() ? isEmailValid() : phoneValid);
+  function setLoginMethod(email: boolean) {
+    setEmailMode(email);
+    setHasValidInput(email ? isEmailValid() : phoneValid);
     if(!IS_TOUCH_SUPPORTED) {
       focusWhenSettled(activeInput(), () => !cancelled);
     }
+  }
+
+  async function switchLoginMethod() {
+    const toEmail = !emailMode();
+    // A server with email sign-up sends no SMS: logging in by phone only works for
+    // an account made before email sign-up was turned on, and still ends with an
+    // email being linked. Say so before letting anyone go that way, as the desktop
+    // client does.
+    if(!toEmail && emailSignup()) {
+      try {
+        await confirmationPopup({
+          titleLangKey: 'Login.PhoneFallback.Title',
+          descriptionLangKey: 'Login.PhoneFallback.Text',
+          button: {langKey: 'Login.PhoneFallback.Confirm'}
+        });
+      } catch{
+        return;
+      }
+    }
+
+    setPhoneFallbackChosen(!toEmail);
+    setLoginMethod(toEmail);
   }
 
   /* ---------- submit ---------- */
@@ -283,23 +336,31 @@ export default function SignInCard(_props: {spec: Spec}) {
     managers.appStateManager.pushToState('authState', {_: 'authStateSignIn'});
 
     if(!IS_TOUCH_SUPPORTED) {
-      cancelFocus = focusWhenSettled(telEl, () => !cancelled);
+      cancelFocus = focusWhenSettled(activeInput(), () => !cancelled);
     }
 
     tryAgain();
 
-    // `true`: a config cached from before the server turned this on would hide
-    // the field for up to a day, and this card is the only place that asks.
-    // Until the answer comes the phone form is what is shown.
-    managers.apiManager.getAppConfig(true).then((appConfig) => {
-      if(cancelled || !appConfig?.email_signup_enabled) return;
+    fetchLoginAppConfig(managers).then((appConfig) => {
+      if(cancelled || !appConfig) return;
 
-      setEmailSignup(true);
-      // do not take the card out from under someone who already typed a number; the
-      // country code the field is pre-filled with does not count as one
-      if(!phoneValid) {
-        switchLoginMethod();
+      // TELESRV_EMAIL_SIGNUP_ENABLE: the server has no SMS, an email address is
+      // how one logs in -- so that is what the card asks for, unless the person
+      // has already started typing a phone number
+      const emailSignupEnabled = !!appConfig.email_signup_enabled;
+      setEmailSignup(emailSignupEnabled);
+      if(!phoneTouched && !isPhoneFallbackChosen() && emailMode() !== emailSignupEnabled) {
+        setLoginMethod(emailSignupEnabled);
       }
+
+      // TELESRV_LOGIN_EMAIL_ENABLE: server allows email login for existing accounts
+      if(appConfig.login_email_enabled) {
+        setLoginEmailEnabled(true);
+      }
+
+      // TELESRV_LOGIN_EMAIL_REQUIRE_SETUP: server requires email setup before login
+      // This is handled by the server returning auth.sentCodeTypeSetUpEmailRequired
+      // which routes to the emailSetup cards. No client-side action needed here.
     }, () => {});
   });
 
@@ -340,7 +401,7 @@ export default function SignInCard(_props: {spec: Spec}) {
         </Button>
         {getCurrentAccount() === 1 && <LanguageChangeButton />}
       </div>
-      {emailSignup() && (
+      {emailAvailable() && (
         <Button
           class="btn-primary btn-secondary btn-primary-transparent primary"
           disabled={submitting()}
