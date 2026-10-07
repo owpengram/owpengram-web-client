@@ -114,6 +114,14 @@
     height: 100%;
     object-fit: contain;
   }
+
+  // the sign-up avatar picker: it has no size of its own and, as a flex item here,
+  // shrinks to its canvas (an unsized canvas is 2:1), which squashed the circle into
+  // an ellipse -- the slot is what sizes it
+  > :global(.avatar-edit) {
+    width: 100%;
+    height: 100%;
+  }
 }
 
 .lottie {
