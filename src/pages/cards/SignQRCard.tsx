@@ -18,7 +18,7 @@ import {LangPackKey, i18n} from '@lib/langPack';
 import AccountController from '@lib/accounts/accountController';
 import {getCurrentAccount} from '@lib/accounts/getCurrentAccount';
 import rootScope from '@lib/rootScope';
-import {fetchLoginAppConfig, readStoredEmailSignup} from '@lib/owpengram/emailSignupSetting';
+import {fetchLoginAppConfig} from '@lib/owpengram/emailSignupSetting';
 
 import AuthCard from '@/pages/AuthCard';
 import {CardSpec, useAuthFlow} from '@/pages/authFlow';
@@ -42,7 +42,7 @@ export default function SignQRCard(_props: {spec: Spec}) {
 
   // the other way in is by email on a server with email sign-up, so the button
   // leading there says so
-  const [emailSignup, setEmailSignup] = createSignal(readStoredEmailSignup());
+  const [emailSignup, setEmailSignup] = createSignal(false);
 
   // Persistent host for the QR canvas (qr-code-styling injects its canvas
   // into this div). We hand it to <MediaHeader.Sticker element={...}>.

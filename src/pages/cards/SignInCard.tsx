@@ -16,7 +16,6 @@ import {encodeEmailPhone} from '@lib/owpengram/emailSignupPhone';
 import {
   fetchLoginAppConfig,
   isPhoneFallbackChosen,
-  readStoredEmailSignup,
   setPhoneFallbackChosen
 } from '@lib/owpengram/emailSignupSetting';
 import cancelEvent from '@helpers/dom/cancelEvent';
@@ -134,22 +133,13 @@ export default function SignInCard(_props: {spec: Spec}) {
 
   /* ---------- email sign-up / login ---------- */
 
-  // Whether this server takes an email address at all, and whether the card is
-  // asking for one. A server with email sign-up is asked by email by default, so
-  // the last answer is remembered and the card opens on the right form at once
-  // instead of showing the phone form until the server has been heard from.
-  const storedEmailSignup = readStoredEmailSignup();
-  const [emailSignup, setEmailSignup] = createSignal(storedEmailSignup);
+  // Same as the desktop client: the card starts on the phone form, and when the
+  // server's app config says email sign-up is on (and the person has not chosen
+  // the phone fallback) it is replaced by the email form. Nothing is remembered
+  // between visits -- what the server says now is what counts.
+  const [emailSignup, setEmailSignup] = createSignal(false);
   const [loginEmailEnabled, setLoginEmailEnabled] = createSignal(false);
-  const [emailMode, setEmailMode] = createSignal(storedEmailSignup && !isPhoneFallbackChosen());
-
-  // Set once the person types into the phone field themselves. Filling in the
-  // country code (which arrives on its own, at an unpredictable moment) does not
-  // count -- that race is what used to flip the card between phone and email.
-  let phoneTouched = false;
-  telEl.addEventListener('input', (e) => {
-    if(e.isTrusted) phoneTouched = true;
-  });
+  const [emailMode, setEmailMode] = createSignal(false);
 
   // true if either email signup or email login is enabled
   const emailAvailable = () => emailSignup() || loginEmailEnabled();
@@ -345,12 +335,11 @@ export default function SignInCard(_props: {spec: Spec}) {
       if(cancelled || !appConfig) return;
 
       // TELESRV_EMAIL_SIGNUP_ENABLE: the server has no SMS, an email address is
-      // how one logs in -- so that is what the card asks for, unless the person
-      // has already started typing a phone number
+      // how one logs in -- so that is what the card asks for
       const emailSignupEnabled = !!appConfig.email_signup_enabled;
       setEmailSignup(emailSignupEnabled);
-      if(!phoneTouched && !isPhoneFallbackChosen() && emailMode() !== emailSignupEnabled) {
-        setLoginMethod(emailSignupEnabled);
+      if(emailSignupEnabled && !isPhoneFallbackChosen()) {
+        setLoginMethod(true);
       }
 
       // TELESRV_LOGIN_EMAIL_ENABLE: server allows email login for existing accounts

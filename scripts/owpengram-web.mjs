@@ -365,7 +365,7 @@ async function main() {
 
     const {target, copied} = copyBuildIntoServer(serverDir);
     console.log(`\n[ok] copied into ${target} (+${copied} static entries from public/)`);
-    console.log('     rebuild the server to embed it: telesrv-ctl restart');
+    console.log('     rebuild the server to embed it: stop and start owpengram-ctl again (it rebuilds the server)');
   } else if(options.fast) {
     console.log('[..] building with vite only (tests and typecheck skipped)\n');
     await run('node', [VITE_BIN, 'build']);
