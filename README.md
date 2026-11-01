@@ -86,6 +86,8 @@ node scripts/owpengram-web.mjs build --fast           # skip tests and typecheck
 node scripts/owpengram-web.mjs embed                  # build INTO owpengram-server
 ```
 
+To build, run `build-web.bat` (or `./build-web.sh`): it asks whether to make a plain build into `dist/` or to build straight into the `owpengram-server` checkout next to this one. `build-web.bat build` and `build-web.bat embed` skip the question.
+
 `run` starts the dev server at http://localhost:8080/ with live reload. `build`
 makes the minified standalone version in `dist/`; copy it to your web server.
 
