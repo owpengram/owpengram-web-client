@@ -25,7 +25,7 @@ import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline/promises';
 import {createPublicKey} from 'node:crypto';
 import {connect} from 'node:net';
-import {cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -274,6 +274,37 @@ function run(command, args, env) {
   });
 }
 
+/**
+ * Why node_modules needs a `pnpm install`, or an empty string when it does not.
+ *
+ * Checking that the folder exists is not enough: pulling or merging upstream
+ * adds dependencies, and a folder from before that has none of them -- the
+ * build then dies on "Cannot find module" instead of saying what to do.
+ * pnpm rewrites node_modules/.modules.yaml on every install, so a manifest or
+ * lockfile newer than it means dependencies changed since.
+ */
+function dependenciesStale() {
+  const modules = join(ROOT, 'node_modules');
+  if(!existsSync(modules)) {
+    return 'node_modules is missing';
+  }
+
+  const marker = join(modules, '.modules.yaml');
+  if(!existsSync(marker)) {
+    return 'node_modules was not installed by pnpm';
+  }
+
+  const installedAt = statSync(marker).mtimeMs;
+  for(const file of ['package.json', 'pnpm-lock.yaml']) {
+    const path = join(ROOT, file);
+    if(existsSync(path) && statSync(path).mtimeMs > installedAt) {
+      return `${file} changed since the last install`;
+    }
+  }
+
+  return '';
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if(options.help) {
@@ -339,8 +370,9 @@ async function main() {
     console.log(`[ok] ${SERVER_KEY}=${server} (.env.local)`);
   }
 
-  if(!existsSync(join(ROOT, 'node_modules'))) {
-    console.log('[..] installing dependencies');
+  const stale = dependenciesStale();
+  if(stale) {
+    console.log(`[..] installing dependencies (${stale})`);
     await run('pnpm', ['install']);
   }
 
