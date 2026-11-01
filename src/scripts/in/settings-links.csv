@@ -20,6 +20,7 @@ tg://settings/devices/terminate-sessions,Chat List > Hamburger > Settings > Devi
 tg://settings/folders,Chat List > Hamburger > Settings > Chat Folders
 tg://settings/folders/create,Chat List > Hamburger > Settings > Chat Folders > Create FOlder
 tg://settings/folders/add-recommended,Chat List > Hamburger > Settings > Chat Folders > Recommended Folders > Add
+tg://settings/folders/show-tags,Chat List > Hamburger > Settings > Chat Folders > Show Folder Tags
 tg://settings/folders/tab-view,Chat List > Hamburger > Settings > Chat Folders > Folders View
 tg://settings/notifications,Chat LIst > Hamburger > Settings > Notifications and Sounds
 tg://settings/notifications/accounts,Chat LIst > Hamburger > Settings > Notifications and Sounds > All Accounts
@@ -43,6 +44,7 @@ tg://settings/privacy/2sv,Chat List > Hamburger > Settings > Privacy and Securit
 tg://settings/privacy/2sv/change,Chat List > Hamburger > Settings > Privacy and Security > Two-Step Verification > Change Password
 tg://settings/privacy/2sv/disable,Chat List > Hamburger > Settings > Privacy and Security > Two-Step Verification > Disable Password
 tg://settings/privacy/2sv/change-email,Chat List > Hamburger > Settings > Two-Step Verification > Change Recovery Email
+tg://settings/login_email,Chat List > Hamburger > Settings > Privacy and Security > Login Email
 tg://settings/privacy/phone-number/,Chat List > Hamburger > Settings > Privacy and Security > Who can see my phone number
 tg://settings/privacy/phone-number/never,Chat List > Hamburger > Settings > Privacy and Security > Who can see my phone number > Exceptions > Never
 tg://settings/privacy/phone-number/always,Chat List > Hamburger > Settings > Privacy and Security > Who can see my phone number > Exceptions > Always
@@ -95,6 +97,7 @@ tg://settings/appearance/night-mode,Chat List > Hamburger > Settings > General S
 tg://settings/appearance/auto-night-mode,Chat List > Hamburger > Settings > General Settings > System Default
 tg://settings/appearance/text-size,Chat List > Hamburger > Settings > General Settings > Message Text Size
 tg://settings/appearance/stickers-and-emoji,Chat List > Hamburger > Settings > Stickers and Emoji
+tg://settings/appearance/stickers-and-emoji/archived,Chat List > Hamburger > Settings > Stickers and Emoji > Archived Stickers
 tg://settings/appearance/stickers-and-emoji/emoji/suggest,Chat List > Hamburger > Settings > Stickers and Emoji > Suggest Animated Emoji
 tg://settings/appearance/stickers-and-emoji/emoji/quick-reaction,Chat List > Hamburger > Settings > Stickers and Emoji > Quick Reaction
 tg://settings/appearance/stickers-and-emoji/suggest-by-emoji,Chat List > Hamburger > Settings > Stickers and Emoji > Suggest Stickers by Emoji

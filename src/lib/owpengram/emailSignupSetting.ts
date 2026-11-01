@@ -1,3 +1,4 @@
+import type {BoundManagers} from '@lib/getProxiedManagers';
 import type rootScope from '@lib/rootScope';
 
 /**
@@ -23,7 +24,7 @@ export function setPhoneFallbackChosen(chosen: boolean) {
  * hide it. Undefined when the
  * server could not be asked.
  */
-export async function fetchLoginAppConfig(managers: typeof rootScope.managers): Promise<MTAppConfig | undefined> {
+export async function fetchLoginAppConfig(managers: typeof rootScope.managers | BoundManagers): Promise<MTAppConfig | undefined> {
   try {
     const answer = await managers.apiManager.invokeApi('help.getAppConfig', {hash: 0});
     if(answer._ !== 'help.appConfig') return;

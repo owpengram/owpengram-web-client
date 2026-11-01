@@ -5264,7 +5264,7 @@ export namespace WebPage {
     document?: Document,
     cached_page?: Page,
     attributes?: Array<WebPageAttribute>,
-    type?: 'document' | 'photo' | 'telegram_channel' | 'telegram_megagroup' | 'telegram_bot' | 'telegram_botapp' | 'telegram_user' | 'telegram_chatlist' | 'telegram_story' | 'telegram_channel_boost' | 'telegram_giftcode' | 'telegram_chat' | 'telegram_videochat' | 'telegram_voicechat' | 'telegram_livestream' | 'telegram_nft' | 'telegram_collection' | 'telegram_story_album' | 'telegram_megagroup_request' | 'telegram_stickerset' | 'telegram_call' | 'telegram_aicomposetone',
+    type?: 'document' | 'photo' | 'telegram_channel' | 'telegram_megagroup' | 'telegram_bot' | 'telegram_botapp' | 'telegram_user' | 'telegram_chatlist' | 'telegram_story' | 'telegram_channel_boost' | 'telegram_giftcode' | 'telegram_chat' | 'telegram_videochat' | 'telegram_voicechat' | 'telegram_livestream' | 'telegram_nft' | 'telegram_collection' | 'telegram_story_album' | 'telegram_megagroup_request' | 'telegram_channel_request' | 'telegram_chat_request' | 'telegram_group_boost' | 'telegram_stickerset' | 'telegram_call' | 'telegram_aicomposetone',
     entities?: MessageEntity[]
   };
 
@@ -5721,7 +5721,7 @@ export namespace ReplyMarkup {
 /**
  * @link https://core.telegram.org/type/MessageEntity
  */
-export type MessageEntity = MessageEntity.messageEntityUnknown | MessageEntity.messageEntityMention | MessageEntity.messageEntityHashtag | MessageEntity.messageEntityBotCommand | MessageEntity.messageEntityUrl | MessageEntity.messageEntityEmail | MessageEntity.messageEntityBold | MessageEntity.messageEntityItalic | MessageEntity.messageEntityCode | MessageEntity.messageEntityPre | MessageEntity.messageEntityTextUrl | MessageEntity.messageEntityMentionName | MessageEntity.inputMessageEntityMentionName | MessageEntity.messageEntityPhone | MessageEntity.messageEntityCashtag | MessageEntity.messageEntityUnderline | MessageEntity.messageEntityStrike | MessageEntity.messageEntityBankCard | MessageEntity.messageEntitySpoiler | MessageEntity.messageEntityCustomEmoji | MessageEntity.messageEntityBlockquote | MessageEntity.messageEntityFormattedDate | MessageEntity.messageEntityDiffInsert | MessageEntity.messageEntityDiffReplace | MessageEntity.messageEntityDiffDelete | MessageEntity.messageEntityEmoji | MessageEntity.messageEntityHighlight | MessageEntity.messageEntityLinebreak | MessageEntity.messageEntityCaret | MessageEntity.messageEntityTimestamp | MessageEntity.messageEntityImage | MessageEntity.messageEntitySubscript | MessageEntity.messageEntitySuperscript | MessageEntity.messageEntityAnchor | MessageEntity.messageEntityRichButton;
+export type MessageEntity = MessageEntity.messageEntityUnknown | MessageEntity.messageEntityMention | MessageEntity.messageEntityHashtag | MessageEntity.messageEntityBotCommand | MessageEntity.messageEntityUrl | MessageEntity.messageEntityEmail | MessageEntity.messageEntityBold | MessageEntity.messageEntityItalic | MessageEntity.messageEntityCode | MessageEntity.messageEntityPre | MessageEntity.messageEntityTextUrl | MessageEntity.messageEntityMentionName | MessageEntity.inputMessageEntityMentionName | MessageEntity.messageEntityPhone | MessageEntity.messageEntityCashtag | MessageEntity.messageEntityUnderline | MessageEntity.messageEntityStrike | MessageEntity.messageEntityBankCard | MessageEntity.messageEntitySpoiler | MessageEntity.messageEntityCustomEmoji | MessageEntity.messageEntityBlockquote | MessageEntity.messageEntityFormattedDate | MessageEntity.messageEntityDiffInsert | MessageEntity.messageEntityDiffReplace | MessageEntity.messageEntityDiffDelete | MessageEntity.messageEntityEmoji | MessageEntity.messageEntityHighlight | MessageEntity.messageEntityLinebreak | MessageEntity.messageEntityCaret | MessageEntity.messageEntityTimestamp | MessageEntity.messageEntityImage | MessageEntity.messageEntitySubscript | MessageEntity.messageEntitySuperscript | MessageEntity.messageEntityAnchor | MessageEntity.messageEntityRichButton | MessageEntity.messageEntityIcon;
 
 export namespace MessageEntity {
   export type messageEntityUnknown = {
@@ -5962,6 +5962,13 @@ export namespace MessageEntity {
     offset?: number,
     length?: number,
     button?: RichText.textButton
+  };
+
+  export type messageEntityIcon = {
+    _: 'messageEntityIcon',
+    offset?: number,
+    length?: number,
+    icon?: Icon
   };
 }
 
@@ -8305,7 +8312,8 @@ export namespace LangPackDifference {
     version: number,
     strings: Array<LangPackString>,
     localVersion?: number,
-    countries?: HelpCountriesList.helpCountriesList
+    countries?: HelpCountriesList.helpCountriesList,
+    rtl?: boolean
   };
 }
 
@@ -19047,6 +19055,7 @@ export interface ConstructorDeclMap {
   'messageEntitySuperscript': MessageEntity.messageEntitySuperscript,
   'messageEntityAnchor': MessageEntity.messageEntityAnchor,
   'messageEntityRichButton': MessageEntity.messageEntityRichButton,
+  'messageEntityIcon': MessageEntity.messageEntityIcon,
 }
 
 export type InvokeAfterMsg = {

@@ -1,42 +1,10 @@
+import {loadChatBubbles, LOAD_CHAT_BUBBLES_TIMEOUT} from '@/tests/helpers/chatBubbles';
 import type {Message, PeerSettings} from '@layer';
 import '@helpers/peerIdPolyfill';
 import {getMiddleware} from '@helpers/middleware';
 import {render} from 'solid-js/web';
 import ejectBubble from '@components/chat/bubbles/ejectBubble';
 import {markMessageLinkEntity} from '@lib/richTextProcessor/filterDisabledEntities';
-
-const moduleMocks = vi.hoisted(() => {
-  const noop = vi.fn();
-  return {
-    apiManagerProxy: new Proxy({}, {get: () => noop}),
-    sidebarLeft: new Proxy({}, {get: () => noop}),
-    sidebarRight: new Proxy({}, {get: () => noop}),
-    rootScope: {
-      myId: 0,
-      premium: false,
-      managers: new Proxy({}, {get: () => ({})}),
-      addEventListener: noop,
-      removeEventListener: noop,
-      dispatchEvent: noop,
-      dispatchEventSingle: noop
-    }
-  };
-});
-
-vi.mock('@lib/apiManagerProxy', () => ({default: moduleMocks.apiManagerProxy}));
-vi.mock('@components/sidebarLeft', () => ({default: moduleMocks.sidebarLeft}));
-vi.mock('@components/sidebarRight', () => ({default: moduleMocks.sidebarRight}));
-vi.mock('@lib/rootScope', () => ({default: moduleMocks.rootScope}));
-vi.mock('@stores/contentSettings', () => ({
-  default: () => ({
-    sensitiveEnabled: () => false,
-    sensitiveCanChange: () => false,
-    needAgeVerification: () => false,
-    ageVerified: () => false,
-    ignoreRestrictionReasons: (): string[] => []
-  })
-}));
-vi.mock('@stores/stars', () => ({default: () => () => 0}));
 
 let ChatBubbles: typeof import('@components/chat/bubbles').default;
 let BubbleGroups: typeof import('@components/chat/bubbleGroups').default;
@@ -49,25 +17,8 @@ let setBubbleHiddenLinksPending: typeof import('@components/chat/bubbles').setBu
 let shouldForceHideNonContactLinkTest: typeof import('@components/chat/bubbles').shouldForceHideNonContactLinkTest;
 
 beforeAll(async() => {
-  class IntersectionObserverMock {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  class WorkerMock {
-    addEventListener() {}
-    removeEventListener() {}
-    postMessage() {}
-    start() {}
-    terminate() {}
-  }
-
-  vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
-  vi.stubGlobal('Worker', WorkerMock);
-  vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener() {}, removeEventListener() {}}));
-  vi.stubGlobal('CSS', {supports: () => false, escape: (value: string) => value});
-  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/webp;base64,');
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+  const loaded = await loadChatBubbles();
+  BubbleGroups = loaded.BubbleGroups;
   ({
     default: ChatBubbles,
     cancelPendingHiddenLinksEvent,
@@ -77,11 +28,8 @@ beforeAll(async() => {
     retainMessageLinkPolicyOnCleanup,
     setBubbleHiddenLinksPending,
     shouldForceHideNonContactLinkTest
-  } = await import('@components/chat/bubbles'));
-  BubbleGroups = (await import('@components/chat/bubbleGroups')).default;
-  // Importing the whole bubbles graph costs far more than the default hook
-  // budget once the rest of the suite is competing for the same CPU.
-}, 60_000);
+  } = loaded.bubbles);
+}, LOAD_CHAT_BUBBLES_TIMEOUT);
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -519,6 +467,7 @@ test.each([
   let rejectRender: (error: Error) => void;
   let queuedRender: Promise<unknown>;
   const bubbleGroups = {
+    getItemByBubble: (): undefined => undefined,
     changeBubbleByBubble: vi.fn((from: HTMLElement, to: HTMLElement) => {
       if(itemBubble === from) itemBubble = to;
     })
@@ -581,7 +530,7 @@ test.each([
   liveBubble.dataset.mid = '100';
   if(replacement.cancelled) {
     liveBubble.dataset.timestamp = '' + serverMessage.date;
-    harness.repositionMessageBubblePreservingScroll(liveBubble, serverMessage);
+    harness.updateGroupedMessage(liveBubble, serverMessage, {regroup: true});
   }
   harness.updateSolidMessageBodyIdentity(liveBubble, serverMessage, tempId);
   rejectRender(new Error('late replacement failure'));
@@ -634,6 +583,7 @@ test('fully regroups the live source when message_sent cancels a structural cand
   };
   let itemBubble: HTMLElement = candidate;
   const bubbleGroups = {
+    getItemByBubble: (): undefined => undefined,
     changeBubbleByBubble: vi.fn((from: HTMLElement, to: HTMLElement) => {
       if(itemBubble === from) itemBubble = to;
     })
@@ -668,7 +618,7 @@ test('fully regroups the live source when message_sent cancels a structural cand
   liveBubble.dataset.mid = '100';
   if(replacement.cancelled) {
     liveBubble.dataset.timestamp = '' + finalMessage.date;
-    harness.repositionMessageBubblePreservingScroll(liveBubble, finalMessage);
+    harness.updateGroupedMessage(liveBubble, finalMessage, {regroup: true});
   }
 
   expect(replacement.cancelled).toBe(true);
@@ -1342,6 +1292,9 @@ test('waits for physical chat generation detach instead of a superseded transiti
 
   chatInner.remove();
   await new Promise((resolve) => setTimeout(resolve, 0));
+  // * torn down after the frame, not in the task that puts the next generation in
+  expect(destroyed).toBe(false);
+  await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
   expect(destroyed).toBe(true);
 });
 
@@ -1357,7 +1310,7 @@ test('disposes a disconnected staging generation without waiting for any transit
   expect(destroyed).toBe(true);
 });
 
-test('keeps visible O alive, disposes superseded A, and observes only the mounted generation', () => {
+test('keeps visible O alive, disposes superseded A, and observes only the mounted generation', async() => {
   const originalMutationObserver = globalThis.MutationObserver;
   const callbacks: Array<() => void> = [];
   const observers: Array<{
@@ -1405,8 +1358,9 @@ test('keeps visible O alive, disposes superseded A, and observes only the mounte
 
     oldChatInner.remove();
     callbacks[0]();
-    expect(oldBubbleDestroyed).toBe(true);
     expect(observers[0].disconnect).toHaveBeenCalledOnce();
+    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+    expect(oldBubbleDestroyed).toBe(true);
     chatDestroyMiddlewareHelper.destroy();
   } finally {
     vi.stubGlobal('MutationObserver', originalMutationObserver);

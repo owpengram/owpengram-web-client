@@ -33,6 +33,9 @@ export default function wrapUrl(url: string, safe?: boolean) {
 
     if(path[0] && path[0][0] === '$' && path[0].length > 1) {
       onclick = 'invoice';
+    } else if(path[0].toLowerCase() === 'getpremium') {
+      // t.me/GetPremium is the Premium offer in any case and with any tail, never the profile @GetPremium
+      onclick = 'premium_offer';
     } else if(/^\+/.test(fullPath) && !PHONE_NUMBER_REG_EXP.test(fullPath)) { // second regexp is for phone numbers (t.me/+38050...)
       onclick = 'joinchat';
     } else if(path[0]) switch(path[0]) {
@@ -49,6 +52,7 @@ export default function wrapUrl(url: string, safe?: boolean) {
       case 'share':
       case 'nft':
       case 'addstyle':
+      case 'contact':
         if(path.length !== 1 && !prefix) {
           onclick = path[0];
           break;
@@ -93,7 +97,9 @@ export default function wrapUrl(url: string, safe?: boolean) {
   } */
 
   if(!(window as any)[onclick]) {
-    onclick = undefined;
+    // * a tg:// link no handler here knows is the server's to explain (`help.getDeepLinkInfo`); an
+    // * `iv` link refused above stays a plain one
+    onclick = tgMatch && onclick && (window as any).unknownDeepLink ? 'unknownDeepLink' : undefined;
   }
 
   out.onclick = onclick;

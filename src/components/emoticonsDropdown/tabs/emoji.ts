@@ -4,7 +4,6 @@ import cancelEvent from '@helpers/dom/cancelEvent';
 import findUpClassName from '@helpers/dom/findUpClassName';
 import {fastRaf} from '@helpers/schedulers';
 import pause from '@helpers/schedulers/pause';
-import appImManager from '@lib/appImManager';
 import {i18n, LangPackKey} from '@lib/langPack';
 import rootScope, {BroadcastEvents} from '@lib/rootScope';
 import {emojiFromCodePoints} from '@vendor/emoji';
@@ -19,7 +18,7 @@ import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
 import wrapSingleEmoji from '@lib/richTextProcessor/wrapSingleEmoji';
 import {attachClickEvent, simulateClickEvent} from '@helpers/dom/clickEvent';
 import {makeMediaSize} from '@helpers/mediaSize';
-import {AppManagers} from '@lib/managers';
+import {ReadingManagers} from '@lib/managers';
 import VisibilityIntersector, {OnVisibilityChangeItem} from '@components/visibilityIntersector';
 import mediaSizes from '@helpers/mediaSizes';
 import {StickerSet} from '@layer';
@@ -60,9 +59,16 @@ import {
   getEmojiSkinToneVariants
 } from '@helpers/emojiSkinTone';
 import showEmojiTonePicker from '@components/emoticonsDropdown/emojiTonePicker';
+import {hotReloadGuard} from '@lib/solidjs/hotReloadGuardProvider';
+import {bindManagersToSession} from '@lib/accounts/bindManagersToAccount';
+import appendClearRecentButton from '@components/emoticonsDropdown/clearRecentButton';
+import forEachReverse from '@helpers/array/forEachReverse';
 
 
 const loadedURLs: Set<string> = new Set();
+// * the fade of an emoji in over its placeholder (base.scss .super-emoji)
+const EMOJI_FADE_TIME = 200;
+
 export function appendEmoji(_emoji: AppEmoji, unify = false) {
   if(_emoji.docId) {
     const customEmojiElement = CustomEmojiElement.create(_emoji.docId);
@@ -105,14 +111,20 @@ export function appendEmoji(_emoji: AppEmoji, unify = false) {
       const placeholder = document.createElement('span');
       placeholder.classList.add('emoji-placeholder');
 
-      if(liteMode.isAvailable('animations')) {
+      // * the fade's transition is there for the fade alone - a transition starts from the style the
+      // * change itself brings - and the placeholder goes once it has faded: what every tile of the
+      // * panel carries is paid each time the panel is hidden
+      const fade = liteMode.isAvailable('animations');
+      if(fade) {
         image.style.opacity = '0';
         placeholder.style.opacity = '1';
       }
 
       image.addEventListener('load', () => {
         fastRaf(() => {
-          if(liteMode.isAvailable('animations')) {
+          if(fade) {
+            image.classList.add('is-fading');
+            placeholder.classList.add('is-fading');
             image.style.opacity = '';
             placeholder.style.opacity = '';
           }
@@ -120,6 +132,11 @@ export function appendEmoji(_emoji: AppEmoji, unify = false) {
           spanEmoji.classList.remove('empty');
 
           loadedURLs.add(url);
+
+          setTimeout(() => {
+            image.classList.remove('is-fading');
+            placeholder.remove();
+          }, fade ? EMOJI_FADE_TIME + 50 : 0);
         });
       }, {once: true});
 
@@ -217,6 +234,13 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
   private noRegularEmoji?: boolean;
   private noSearchGroups?: boolean;
   private mainSets: () => (Promise<DocId[]> | Array<Promise<DocId[]>>);
+  // * the second of the main sets is a recent one the user can clear — the reaction picker's: `clear`
+  // * forgets it and answers what the category keeps after that
+  private clearRecent: {
+    titleLangKey: LangPackKey,
+    descriptionLangKey: LangPackKey,
+    clear: (managers: ReadingManagers) => Promise<DocId[]>
+  };
   private additionalSets: () => Promise<StickerSet.stickerSet[]>;
   private additionalLocalStickerSet: () => Promise<{title: LangPackKey, stickers: MyDocument[]}>;
   private onClick: (emoji: EmojiTabItem) => void;
@@ -238,17 +262,18 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
   public initPromise: Promise<void>;
 
   constructor(options: {
-    managers: AppManagers,
+    managers: ReadingManagers,
     isStandalone?: boolean,
     noRegularEmoji?: boolean,
     noSearchGroups?: boolean,
     mainSets?: EmojiTab['mainSets'],
+    clearRecent?: EmojiTab['clearRecent'],
     additionalSets?: EmojiTab['additionalSets'],
     additionalLocalStickerSet?: EmojiTab['additionalLocalStickerSet'],
     onClick?: EmojiTab['onClick'],
     noPacks?: EmojiTab['noPacks'],
     noSearch?: EmojiTab['noSearch'],
-    additionalStickerViewerClass?: EmojiTab['additionalStickerViewerClass'],
+    mediaPeekClass?: EmojiTab['mediaPeekClass'],
     preloaderDelay?: EmojiTab['preloaderDelay'],
     freeCustomEmoji?: EmojiTab['freeCustomEmoji'],
     canHaveEmojiTimer?: EmojiTab['canHaveEmojiTimer'],
@@ -261,7 +286,7 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
     super({
       managers: options.managers,
       noMenu: options.noPacks,
-      additionalStickerViewerClass: options.additionalStickerViewerClass,
+      mediaPeekClass: options.mediaPeekClass,
       searchFetcher: options.noSearch ? undefined : async(value) => {
         if(!value) return {emojis: []};
 
@@ -468,6 +493,7 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
   }
 
   public init() {
+    const managers = bindManagersToSession(this.managers);
     super.init();
     this.init = undefined;
 
@@ -557,15 +583,15 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
     const mainSetsResult = this.mainSets?.();
     const promise = Promise.all([
       !this.preloaderDelay ? undefined : pause(this.preloaderDelay),
-      !this.noRegularEmoji && this.managers.appEmojiManager.getRecentEmojis('native'),
-      !this.isStandalone && this.managers.appEmojiManager.getRecentEmojis('custom'),
+      !this.noRegularEmoji && managers.appEmojiManager.getRecentEmojis('native'),
+      !this.isStandalone && managers.appEmojiManager.getRecentEmojis('custom'),
       !this.noPacks && Promise.resolve(apiManagerProxy.isPremiumFeaturesHidden()).then((isPremiumPurchaseHidden) => {
-        return isPremiumPurchaseHidden ? undefined : this.managers.appEmojiManager.getCustomEmojis();
+        return isPremiumPurchaseHidden ? undefined : managers.appEmojiManager.getCustomEmojis();
       }),
       mainSetsResult && Promise.all(Array.isArray(mainSetsResult) ? mainSetsResult : [mainSetsResult]),
       this.additionalSets?.(),
       this.additionalLocalStickerSet?.(),
-      !this.noRegularEmoji && this.managers.appEmojiManager.getEmojiVariants()
+      !this.noRegularEmoji && managers.appEmojiManager.getEmojiVariants()
     ]).then(([_, recent, recentCustom, sets, mainSets, additionalSets, additionalLocalStickerSet, emojiVariants]) => {
       this.emojiVariants = emojiVariants || {};
       this.applySavedEmojiVariants();
@@ -629,6 +655,17 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
             batch: true
           });
         }
+
+        if(this.clearRecent && mainSets?.[1] && recentCategory.elements.title) {
+          const {clear, titleLangKey, descriptionLangKey} = this.clearRecent;
+          appendClearRecentButton({
+            category: recentCategory,
+            managers,
+            titleLangKey,
+            descriptionLangKey,
+            clear: (managers) => clear(managers).then((docIds) => this.keepCategoryEmojis(recentCategory, docIds))
+          });
+        }
       }
 
       if(recentCustomCategory) {
@@ -690,6 +727,24 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
     });
 
     return this.initPromise = promise;
+  }
+
+  /** Leaves only the custom emoji of `docIds` in a local category: what a cleared recent one keeps */
+  private keepCategoryEmojis(category: EmojiTabCategory, docIds: DocId[]) {
+    const keep = new Set(docIds);
+    forEachReverse(category.items, (item, idx) => {
+      if(!keep.has(item.docId)) {
+        category.items.splice(idx, 1);
+        item.element.remove();
+      }
+    });
+
+    this.onLocalCategoryUpdate(category);
+    // * the canvas renderer draws what it was handed: it is handed what is left, as on scrolling back in
+    if(category.items.length && this.isCategoryVisible(category)) {
+      this._onCategoryVisibility(category, false);
+      this._onCategoryVisibility(category, true);
+    }
   }
 
   private renderLocalStickerSet(localStickerSet: {title: LangPackKey, stickers: MyDocument[]}) {
@@ -1199,7 +1254,7 @@ export default class EmojiTab extends EmoticonsTabC<EmojiTabCategory, {emojis: A
       if(showToast) {
         const a = anchorCallback(() => {
           hideToast();
-          appImManager.openPremiumBot();
+          hotReloadGuard.appImManager.openPremiumBot();
         });
         toastNew({
           langPackKey: 'CustomEmoji.PremiumAlert',

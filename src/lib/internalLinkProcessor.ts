@@ -17,14 +17,15 @@ import {User, AttachMenuPeerType, MessagesBotApp, BotApp, ChatlistsChatlistInvit
 import {i18n, LangPackKey, _i18n} from '@lib/langPack';
 import {PHONE_NUMBER_REG_EXP} from '@lib/richTextProcessor';
 import {isWebAppNameValid} from '@lib/richTextProcessor/validators';
-import appImManager, {APP_TABS, JoinConferenceOptions} from '@lib/appImManager';
+import appImManager, {JoinConferenceOptions} from '@lib/appImManager';
 import {makeFullMid} from '@appManagers/utils/messages/fullMid';
 import {INTERNAL_LINK_TYPE, InternalLinkTypeMap, InternalLink} from '@lib/internalLink';
-import {AppManagers} from '@lib/managers';
+import {TabManagers} from '@lib/managers';
 import {createStoriesViewerWithPeer} from '@components/stories/viewer';
 import {simulateClickEvent} from '@helpers/dom/clickEvent';
 import shake from '@helpers/dom/shake';
 import showPremiumPopup from '@components/popups/premium';
+import getPremiumLinkRef from '@helpers/getPremiumLinkRef';
 import rootScope from '@lib/rootScope';
 import showBoostPopup from '@components/popups/boost';
 import showGiftLinkPopup from '@components/popups/giftLink';
@@ -41,7 +42,7 @@ import appSidebarRight from '@components/sidebarRight';
 import pause from '@helpers/schedulers/pause';
 import namedPromises from '@helpers/namedPromises';
 import {openInstantViewInAppBrowser} from '@components/browser';
-import SolidJSHotReloadGuardProvider from '@lib/solidjs/hotReloadGuardProvider';
+import SolidJSHotReloadGuardProvider, {registerHotReloadGuard} from '@lib/solidjs/hotReloadGuardProvider';
 import cancelEvent from '@helpers/dom/cancelEvent';
 import appSidebarLeft from '@components/sidebarLeft';
 import {AppContactsTab} from '@components/solidJsTabs/tabs';
@@ -58,6 +59,26 @@ import parseBotAdminRights from '@appManagers/utils/bots/parseBotAdminRights';
 import isEphemeralMessage from '@appManagers/utils/messages/isEphemeralMessage';
 import parseChatSpecificTag from '@lib/richTextProcessor/parseChatSpecificTag';
 import searchByTag from '@lib/richTextProcessor/searchByTag';
+import {APP_TABS} from '@lib/appColumns';
+import {bindManagersToSession} from '@lib/accounts/bindManagersToAccount';
+import openBankCardMenu from '@components/bankCardMenu';
+import confirmationPopup from '@components/confirmationPopup';
+import wrapPeerTitle from '@components/wrappers/peerTitle';
+import wrapRichText from '@lib/richTextProcessor/wrapRichText';
+import {getManagersSession, isSessionLeaving} from '@lib/accounts/getCurrentAccount';
+
+/**
+ * For a lookup whose failure is only a miss: any error is one but MIDDLEWARE, the end of the account
+ * session it was asked in - the flow it belongs to stops there rather than go on as a miss on the
+ * account the tab shows now.
+ */
+const missUnlessSessionEnded = (err: ApiError): undefined => {
+  if(err?.type === 'MIDDLEWARE') {
+    throw err;
+  }
+
+  return undefined;
+};
 
 /**
  * A link whose section we know but whose path we do not — the one thing worse
@@ -69,11 +90,11 @@ const showUnsupportedLinkToast = () => {
 };
 
 export class InternalLinkProcessor {
-  protected managers: AppManagers;
+  protected managers: TabManagers;
   private processingAddAiStyleSlugs: Set<string> = new Set();
   private tagSearchVersion = 0;
 
-  private showUsernameResolveError(err: ApiError) {
+  public showUsernameResolveError(err: ApiError) {
     if(err.type === 'USERNAME_NOT_OCCUPIED') {
       toastNew({langPackKey: 'NoUsernameFound'});
     } else if(err.type === 'USERNAME_INVALID') {
@@ -81,7 +102,32 @@ export class InternalLinkProcessor {
     }
   }
 
-  public construct(managers: AppManagers) {
+  /**
+   * Asks before a link goes where its address points - a masked link's real address, a tg:// link
+   * this client cannot open - and Open follows it as a plain link, within that press of the button.
+   */
+  private showOpenUrlAlert(element: HTMLAnchorElement) {
+    const href = element.href;
+
+    const a = element.cloneNode(true) as HTMLAnchorElement;
+    a.className = 'anchor-url';
+    a.innerText = href;
+    a.removeAttribute('onclick');
+
+    showPeerPopup('popup-masked-url', {
+      titleLangKey: 'OpenUrlTitle',
+      descriptionLangKey: 'OpenUrlAlert2',
+      descriptionLangArgs: [a],
+      buttons: [{
+        langKey: 'Open',
+        callback: () => {
+          a.click();
+        }
+      }]
+    });
+  }
+
+  public construct(managers: TabManagers) {
     this.managers = managers;
 
     // a middle click never reaches an anchor's inline `onclick`, so the alert below is wired to it
@@ -90,27 +136,22 @@ export class InternalLinkProcessor {
 
     addAnchorListener<{}>({
       name: 'showMaskedAlert',
-      callback: ({element}) => {
-        const href = element.href;
-
-        const a = element.cloneNode(true) as HTMLAnchorElement;
-        a.className = 'anchor-url';
-        a.innerText = href;
-        a.removeAttribute('onclick');
-
-        showPeerPopup('popup-masked-url', {
-          titleLangKey: 'OpenUrlTitle',
-          descriptionLangKey: 'OpenUrlAlert2',
-          descriptionLangArgs: [a],
-          buttons: [{
-            langKey: 'Open',
-            callback: () => {
-              a.click();
-            }
-          }]
-        });
-      }
+      callback: ({element}) => this.showOpenUrlAlert(element)
     });
+
+    // a tg:// link that nothing below handles (wrapUrl names this handler for it)
+    addAnchorListener<{}>({
+      name: 'unknownDeepLink',
+      noPathnameParams: true,
+      noUriParams: true,
+      callback: ({element}) => this.processUnknownDeepLink(element)
+    });
+
+    // a bank card number in a text (wrapRichText) is a link to its menu, not to anywhere
+    (window as any).onBankCardClick = (element: HTMLElement, e: MouseEvent) => {
+      cancelEvent(e);
+      openBankCardMenu(element, e);
+    };
 
     addAnchorListener<{uriParams: {command: string, bot: string}}>({
       name: 'execBotCommand',
@@ -118,7 +159,8 @@ export class InternalLinkProcessor {
         const {command, bot} = uriParams;
         const chat = appImManager.chat;
         let sendingParams = chat.input?.getEphemeralSendingSnapshot() || {
-          peerId: chat.peerId
+          peerId: chat.peerId,
+          threadId: chat.threadId
         };
         const bubble = findUpClassName(element, 'bubble');
         if(
@@ -315,8 +357,8 @@ export class InternalLinkProcessor {
       });
     }
 
-    type K1 = {thread?: string, comment?: string, t?: string, option?: string};
-    type K2 = {thread?: string, comment?: string, start?: string, startgroup?: string, startchannel?: string, admin?: string, t?: string, text?: string, option?: string};
+    type K1 = {thread?: string, comment?: string, t?: string, option?: string, single?: string};
+    type K2 = {thread?: string, comment?: string, start?: string, startgroup?: string, startchannel?: string, admin?: string, t?: string, text?: string, option?: string, single?: string, game?: string};
     type K3 = {startattach?: string, attach?: string, choose?: TelegramChoosePeerType};
     type K4 = {startapp?: string, mode?: 'compact' | 'fullscreen'};
     type K5 = {story?: string};
@@ -386,7 +428,8 @@ export class InternalLinkProcessor {
             comment: uriParams.comment,
             option: 'option' in uriParams ? uriParams.option : undefined,
             stack: appImManager.getStackFromElement(element),
-            t: uriParams.t
+            t: uriParams.t,
+            single: uriParams.single
           };
         } else if(pathnameParams[1] ? isWebAppNameValid(pathnameParams[1]) : (uriParams as K4).startapp !== undefined) {
           assumeType<K4>(uriParams);
@@ -414,7 +457,9 @@ export class InternalLinkProcessor {
             option: 'option' in uriParams ? uriParams.option : undefined,
             stack: appImManager.getStackFromElement(element),
             t: uriParams.t,
-            text: uriParams.text
+            text: uriParams.text,
+            single: uriParams.single,
+            game: uriParams.game
           };
         }
 
@@ -463,7 +508,8 @@ export class InternalLinkProcessor {
         appname?: string,
         startapp?: string,
         compact?: string,
-        story?: string
+        story?: string,
+        single?: string
       }
     }>({
       name: 'resolve',
@@ -505,7 +551,8 @@ export class InternalLinkProcessor {
         channel: string,
         post: string,
         thread?: string,
-        comment?: string
+        comment?: string,
+        single?: string
       }
     }>({
       name: 'privatepost',
@@ -597,6 +644,24 @@ export class InternalLinkProcessor {
       protocol: 'tg',
       callback: ({uriParams}) => {
         const link = this.makeLink(INTERNAL_LINK_TYPE.PREMIUM_FEATURES, uriParams);
+        return this.processInternalLink(link);
+      }
+    });
+
+    // t.me/GetPremium?ref=twitter = tg://premium_offer?ref=tme_getpremium_twitter
+    addAnchorListener<{
+      uriParams: {
+        ref?: string
+      }
+    }>({
+      name: 'premium_offer',
+      noPathnameParams: true,
+      callback: ({uriParams}) => {
+        const link: InternalLink = {
+          _: INTERNAL_LINK_TYPE.PREMIUM_FEATURES,
+          ref: getPremiumLinkRef(uriParams.ref)
+        };
+
         return this.processInternalLink(link);
       }
     });
@@ -903,6 +968,16 @@ export class InternalLinkProcessor {
           case 'ton':
             return showStarsPopup({ton: true});
 
+          // tdesktop, Android and iOS open the change-email screen itself, which
+          // is what the Login Email row does — not the row to point at
+          case 'login_email':
+            return Promise.all([
+              this.managers.passwordManager.getState(),
+              import('@components/sidebarLeft/tabs/changeLoginEmail')
+            ]).then(([passwordState, {openChangeLoginEmailTab}]) => {
+              return openChangeLoginEmailTab(appSidebarLeft, passwordState);
+            });
+
           default:
             // Every section the settings search indexes is addressable — see
             // @lib/settingsSearch/link. Imported lazily to keep the index out of
@@ -983,10 +1058,40 @@ export class InternalLinkProcessor {
         return this.processInternalLink(link);
       }
     });
+
+    // t.me/contact/<token>
+    addAnchorListener<{pathnameParams: ['contact', string]}>({
+      name: 'contact',
+      callback: ({pathnameParams}) => {
+        // the path keeps the token percent-encoded; a broken escape leaves it as it came, a dead link
+        let token = pathnameParams[1] || '';
+        try {
+          token = decodeURIComponent(token);
+        } catch{}
+
+        const link: InternalLink = {
+          _: INTERNAL_LINK_TYPE.CONTACT_TOKEN,
+          token
+        };
+
+        return this.processInternalLink(link);
+      }
+    });
+
+    // tg://contact?token=<token>
+    addAnchorListener<{uriParams: {token?: string}}>({
+      name: 'contact',
+      protocol: 'tg',
+      callback: ({uriParams}) => {
+        const link = this.makeLink(INTERNAL_LINK_TYPE.CONTACT_TOKEN, {token: uriParams.token || ''});
+        return this.processInternalLink(link);
+      }
+    });
   }
 
   /** What `tg://chats/emoji-status` — and its `tg://settings` alias — opens. */
   private showEmojiStatusPicker() {
+    const managers = bindManagersToSession(this.managers);
     // iOS opens the picker itself, from where it always opens — for us
     // that is the status button in the chat list header.
     const statusBtn = appSidebarLeft.sidebarEl.querySelector<HTMLElement>('.sidebar-emoji-status');
@@ -1016,7 +1121,7 @@ export class InternalLinkProcessor {
 
       const {openEmojiStatusPicker} = await import('@components/sidebarLeft/emojiStatusPicker');
       openEmojiStatusPicker({
-        managers: this.managers,
+        managers,
         anchorElement: statusBtn.closest('.sidebar-header')
       });
     });
@@ -1051,6 +1156,10 @@ export class InternalLinkProcessor {
   }
 
   public processMessageLink = (link: InternalLink.InternalLinkMessage) => {
+    if(link.game) {
+      return this.shareGame(link);
+    }
+
     if(link.startgroup !== undefined || link.startchannel !== undefined) {
       const requestedRights = parseBotAdminRights(link.admin);
       const scope = getBotAddToChatScope(link, requestedRights);
@@ -1084,23 +1193,80 @@ export class InternalLinkProcessor {
       stack: link.stack,
       threadId,
       mediaTimestamp: link.t && +link.t,
-      text: link.text
+      text: link.text,
+      wholeAlbum: link.single === undefined
     });
   };
 
+  /**
+   * `t.me/<bot>?game=<short_name>`: the game goes to a chat the user picks - a forum's topic, never
+   * Saved Messages - once they confirm it, and that chat opens (tdesktop's `ShowShareGameBox`). A name
+   * that is not a bot's opens as it would without the game.
+   */
+  private async shareGame(link: InternalLink.InternalLinkMessage): Promise<unknown> {
+    const managers = bindManagersToSession(this.managers);
+    const bot = await managers.appUsersManager.resolveUserByUsername(link.domain).catch(missUnlessSessionEnded);
+    if(!bot || !bot.pFlags.bot) {
+      return this.processMessageLink({...link, game: undefined});
+    }
+
+    let chosen: Awaited<ReturnType<typeof showSharingPicker2Popup>>;
+    try {
+      chosen = await showSharingPicker2Popup({
+        chatRightsActions: ['send_games'],
+        exceptSelf: true,
+        useTopics: true
+      });
+
+      await confirmationPopup({
+        descriptionLangKey: 'SendGameToText',
+        // * a channel's direct-message conversation is named by its other side, as the picker's row is
+        descriptionLangArgs: [await wrapPeerTitle({peerId: chosen.peerId, threadId: chosen.threadId ?? chosen.monoforumThreadId})],
+        button: {langKey: 'OK'}
+      });
+    } catch{
+      return;
+    }
+
+    // * confirmed for the account it was asked on: nothing is sent or opened once the tab is on another
+    if(isSessionLeaving(getManagersSession(managers))) {
+      return;
+    }
+
+    const {peerId, threadId, monoforumThreadId} = chosen;
+    managers.appGamesManager.shareGame({
+      peerId,
+      threadId,
+      monoforumThreadId,
+      botId: bot.id,
+      shortName: link.game
+    }).catch((err: ApiError) => {
+      // * no message stands for the game until the server sends it, so the chat cannot show that it
+      // * failed: it is said here, as tdesktop does; a slow mode wait has its own popup (appImManager)
+      if(err?.type === 'MIDDLEWARE' || err?.type?.startsWith('SLOWMODE_WAIT')) {
+        return;
+      }
+
+      toastNew({langPackKey: 'Error.AnError'});
+    });
+
+    return appImManager.setInnerPeer({peerId, threadId, monoforumThreadId});
+  }
+
   public processPrivatePostLink = async(link: InternalLink.InternalLinkPrivatePost) => {
+    const managers = bindManagersToSession(this.managers);
     const chatId = link.channel.toChatId();
     const userId = link.channel.toUserId();
 
     const {chat, isBotforum, user} = await namedPromises({
-      chat: this.managers.appChatsManager.getChat(chatId),
-      isBotforum: this.managers.appUsersManager.isBotforum(userId),
-      user: this.managers.appUsersManager.getUser(userId)
+      chat: managers.appChatsManager.getChat(chatId),
+      isBotforum: managers.appUsersManager.isBotforum(userId),
+      user: managers.appUsersManager.getUser(userId)
     });
 
     if(!chat && !isBotforum) {
       try {
-        await this.managers.appChatsManager.resolveChannel(chatId);
+        await managers.appChatsManager.resolveChannel(chatId);
       } catch(err) {
         toastNew({langPackKey: 'LinkNotFound'});
         throw err;
@@ -1116,7 +1282,8 @@ export class InternalLinkProcessor {
       threadId,
       pollOption: link.option,
       stack: link.stack,
-      mediaTimestamp: link.t && +link.t
+      mediaTimestamp: link.t && +link.t,
+      wholeAlbum: link.single === undefined
     });
   };
 
@@ -1282,8 +1449,9 @@ export class InternalLinkProcessor {
   };
 
   public processInvoiceLink = (link: InternalLink.InternalLinkInvoice) => {
-    return this.managers.appPaymentsManager.getInputInvoiceBySlug(link.slug).then((inputInvoice) => {
-      return this.managers.appPaymentsManager.getPaymentForm(inputInvoice).then((paymentForm) => {
+    const managers = bindManagersToSession(this.managers);
+    return managers.appPaymentsManager.getInputInvoiceBySlug(link.slug).then((inputInvoice) => {
+      return managers.appPaymentsManager.getPaymentForm(inputInvoice).then((paymentForm) => {
         // const message: Message.message = {
         //   _: 'message',
         //   date: 0,
@@ -1360,7 +1528,8 @@ export class InternalLinkProcessor {
   };
 
   public processWebAppLink = async(link: InternalLink.InternalLinkWebApp) => {
-    const user = await this.managers.appUsersManager.resolveUserByUsername(link.domain).catch(() => undefined as User.user);
+    const managers = bindManagersToSession(this.managers);
+    const user = await managers.appUsersManager.resolveUserByUsername(link.domain).catch(() => undefined as User.user);
     if(!user) {
       toastNew({langPackKey: 'Alert.UserDoesntExists'});
       return;
@@ -1396,7 +1565,7 @@ export class InternalLinkProcessor {
 
     let messagesBotApp: MessagesBotApp;
     try {
-      messagesBotApp = await this.managers.appAttachMenuBotsManager.getBotApp(botId, link.appname);
+      messagesBotApp = await managers.appAttachMenuBotsManager.getBotApp(botId, link.appname);
     } catch(err) {
       if((err as ApiError).type === 'BOT_APP_INVALID') {
         toastNew({langPackKey: 'Alert.BotAppDoesntExist'});
@@ -1449,6 +1618,7 @@ export class InternalLinkProcessor {
   };
 
   public processStoryLink = async(link: InternalLink.InternalLinkStory) => {
+    const managers = bindManagersToSession(this.managers);
     const event = window.event;
     const bubble = findUpClassName(event.target as HTMLElement, 'bubble');
     if(bubble && bubble.classList.contains('story')) {
@@ -1458,7 +1628,7 @@ export class InternalLinkProcessor {
 
     let peer: User.user | Chat;
     try {
-      peer = await this.managers.appUsersManager.resolveUsername(link.domain);
+      peer = await managers.appUsersManager.resolveUsername(link.domain);
     } catch(err) {
       if((err as ApiError).type === 'USERNAME_NOT_OCCUPIED') {
         toastNew({langPackKey: 'NoUsernameFound'});
@@ -1473,7 +1643,7 @@ export class InternalLinkProcessor {
     // * `t.me/<name>/s/live` names the peer's current live stream, not a story id — open the peer's
     // * stories, as tdesktop does
     if(link.story === 'live') {
-      const peerStories = await this.managers.appStoriesManager.getPeerStories(peerId);
+      const peerStories = await managers.appStoriesManager.getPeerStories(peerId);
       if(!peerStories?.stories.length) {
         toastNew({langPackKey: 'NoStoryFound'});
         return;
@@ -1483,7 +1653,7 @@ export class InternalLinkProcessor {
       return;
     }
 
-    const storyItem = await this.managers.appStoriesManager.getStoryById(peerId, +link.story);
+    const storyItem = await managers.appStoriesManager.getStoryById(peerId, +link.story);
     if(!storyItem) {
       toastNew({langPackKey: 'NoStoryFound'});
       return;
@@ -1511,7 +1681,8 @@ export class InternalLinkProcessor {
       return;
     }
 
-    showPremiumPopup();
+    // * a bare tg://premium_offer is reported as tdesktop reports it
+    showPremiumPopup({ref: link.ref || 'deeplink'});
   };
 
   public processGiftCodeLink = (link: InternalLink.InternalLinkGiftCode) => {
@@ -1563,13 +1734,14 @@ export class InternalLinkProcessor {
   };
 
   public processShareLink = async(link: InternalLink.InternalLinkShare) => {
+    const managers = bindManagersToSession(rootScope.managers);
     const {peerId, threadId, monoforumThreadId} = await showSharingPicker2Popup();
     // The shared text becomes a draft of the chosen chat — any chat, the way
     // tdesktop's `MainWidget::shareUrl` does it. `setInnerPeer({text})` is the
     // `?text=` deep-link path, which only prefills private chats.
     const text = [link.url, link.text].filter(Boolean).join('\n');
     if(text) {
-      await rootScope.managers.appDraftsManager.setDraft(peerId, threadId || monoforumThreadId, text);
+      await managers.appDraftsManager.setDraft(peerId, threadId || monoforumThreadId, text);
     }
 
     appImManager.setInnerPeer({peerId, threadId, monoforumThreadId});
@@ -1593,8 +1765,10 @@ export class InternalLinkProcessor {
       await pause(500);
     }
     appSidebarRight.toggleSidebar(true, true);
-    appSidebarRight.sharedMediaTab.setSearchTab('gifts');
-    appSidebarRight.sharedMediaTab.searchSuper.stargiftsActions?.setFilters({chosenCollection: Number(link.id)});
+    const sharedMediaTab = appSidebarRight.sharedMediaTab;
+    await sharedMediaTab.setSearchTab('gifts');
+    if(appSidebarRight.sharedMediaTab !== sharedMediaTab) return;
+    sharedMediaTab.searchSuper.stargiftsActions?.setFilters({chosenCollection: Number(link.id)});
   };
 
   public processStoryAlbumLink = async(link: InternalLink.InternalLinkStoryAlbum) => {
@@ -1617,9 +1791,50 @@ export class InternalLinkProcessor {
         await pause(500);
       }
       appSidebarRight.toggleSidebar(true, true);
-      appSidebarRight.sharedMediaTab.setSearchTab('stories');
-      appSidebarRight.sharedMediaTab.searchSuper.storiesSetAlbum(albumId);
+      const sharedMediaTab = appSidebarRight.sharedMediaTab;
+      await sharedMediaTab.setSearchTab('stories');
+      if(appSidebarRight.sharedMediaTab !== sharedMediaTab) return;
+      sharedMediaTab.searchSuper.storiesSetAlbum(albumId);
     }
+  };
+
+  /**
+   * Someone's "My QR code" link: the server makes its owner a contact and names them; a token that
+   * has expired, or a user who is gone, is a dead link (tdesktop's `resolveContactToken`).
+   */
+  public processContactTokenLink = async(link: InternalLink.InternalLinkContactToken) => {
+    const managers = bindManagersToSession(this.managers);
+    const user = link.token ?
+      await managers.appUsersManager.importContactToken(link.token).catch(missUnlessSessionEnded) :
+      undefined;
+    if(!user || user._ !== 'user' || user.pFlags.deleted) {
+      toastNew({langPackKey: 'ContactLinkInvalid'});
+      return;
+    }
+
+    return appImManager.setInnerPeer({peerId: user.id.toPeerId(false)});
+  };
+
+  /**
+   * A tg:// link this client does not know: the server is asked about it, and what it has to say is
+   * shown (tdesktop's `HandleUnknown`; its offer to update the app is for an installed one). When it
+   * has nothing to say, the link may still be another Telegram app's: it is offered to the system the
+   * way a plain link went before, on a press of Open: after the lookup the click that brought it here
+   * no longer counts as the user's, and the browser would block it.
+   */
+  public processUnknownDeepLink = async(element: HTMLAnchorElement) => {
+    const managers = bindManagersToSession(this.managers);
+    // tdesktop asks with what follows `tg://` up to the query
+    const path = element.href.replace(/^tg:(?:\/\/)?/i, '').split(/[?#]/)[0];
+    const info = await managers.apiManager.getDeepLinkInfo(path).catch(missUnlessSessionEnded);
+    if(info && info._ === 'help.deepLinkInfo') {
+      return confirmationPopup({
+        button: {langKey: 'OK', isCancel: true},
+        description: wrapRichText(info.message, {entities: info.entities})
+      }).catch(noop);
+    }
+
+    this.showOpenUrlAlert(element);
   };
 
   public processInstantViewLink = (link: InternalLink.InternalLinkInstantView) => {
@@ -1656,7 +1871,8 @@ export class InternalLinkProcessor {
       [INTERNAL_LINK_TYPE.STORY_ALBUM]: this.processStoryAlbumLink,
       [INTERNAL_LINK_TYPE.INSTANT_VIEW]: this.processInstantViewLink,
       [INTERNAL_LINK_TYPE.CONFERENCE_CALL]: this.processConferenceCallLink,
-      [INTERNAL_LINK_TYPE.ADD_AI_STYLE]: this.processAddAiStyleLink
+      [INTERNAL_LINK_TYPE.ADD_AI_STYLE]: this.processAddAiStyleLink,
+      [INTERNAL_LINK_TYPE.CONTACT_TOKEN]: this.processContactTokenLink
     };
 
     const processor = map[link._];
@@ -1669,6 +1885,10 @@ export class InternalLinkProcessor {
   }
 }
 
+// made once: a hot update keeps it and moves it onto the edited class (see @helpers/hotRegistry)
 const internalLinkProcessor = new InternalLinkProcessor();
 MOUNT_CLASS_TO && (MOUNT_CLASS_TO.internalLinkProcessor = internalLinkProcessor);
+registerHotReloadGuard({internalLinkProcessor});
 export default internalLinkProcessor;
+
+if(import.meta.hot) import.meta.hot.accept();

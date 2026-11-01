@@ -8,9 +8,9 @@
 import deepEqual from '@helpers/object/deepEqual';
 import isObject from '@helpers/object/isObject';
 import safeReplaceObject from '@helpers/object/safeReplaceObject';
-import {ChannelAdminLogEvent, ChannelParticipant, ChannelsCreateChannel, ChannelsGetAdminLog, ChannelsGetAdminedPublicChannels, ChannelsSendAsPeers, Chat, ChatAdminRights, ChatBannedRights, ChatFull, ChatInvite, ChatParticipant, ChatPhoto, ChatReactions, EmojiStatus, InputChannel, InputChatPhoto, InputFile, InputPeer, InputUser, MessagesChats, MessagesChatInviteJoinResult, MessagesSponsoredMessages, MissingInvitee, Peer, SponsoredMessage, SponsoredPeer, StickerSet, Update, Updates} from '@layer';
+import {ChannelAdminLogEvent, ChannelParticipant, ChannelsCreateChannel, ChannelsGetAdminLog, ChannelsGetAdminedPublicChannels, ChannelsSendAsPeers, Chat, ChatAdminRights, ChatBannedRights, ChatFull, ChatInvite, ChatParticipant, ChatPhoto, ChatReactions, EmojiStatus, InputChannel, InputChatPhoto, InputFile, InputPeer, InputUser, MessagesChats, Photo, MessagesChatInviteJoinResult, MessagesSponsoredMessages, MissingInvitee, Peer, SponsoredMessage, SponsoredPeer, StickerSet, Update, Updates} from '@layer';
 import {AppManager} from '@appManagers/manager';
-import hasRights from '@appManagers/utils/chats/hasRights';
+import hasRights, {isSendRight} from '@appManagers/utils/chats/hasRights';
 import getParticipantPeerId from '@appManagers/utils/chats/getParticipantPeerId';
 import {AppStoragesManager} from '@appManagers/appStoragesManager';
 import getServerMessageId from '@appManagers/utils/messageId/getServerMessageId';
@@ -19,9 +19,12 @@ import tsNow from '@helpers/tsNow';
 import getPeerActiveUsernames from '@appManagers/utils/peers/getPeerActiveUsernames';
 import MTProtoMessagePort from '@lib/mainWorker/mainMessagePort';
 import getPeerId from '@appManagers/utils/peers/getPeerId';
+import {getUpdatesList} from '@lib/calls/helpers/groupCallUpdates';
+import noop from '@helpers/noop';
 import callbackify from '@helpers/callbackify';
 import {SlicedCachedFetcher} from '@appManagers/utils/chats/slicedCachedFetcher';
 import {CHAT_LEGACY_ADMIN_RIGHTS} from '@lib/appManagers/utils/chats/constants';
+import getPhotoInput from '@appManagers/utils/photos/getPhotoInput';
 import {getStickerSetInputById} from '@lib/appManagers/utils/stickers/getStickerSetInput';
 
 export type Channel = Chat.channel;
@@ -74,6 +77,9 @@ export class AppChatsManager extends AppManager {
   private recommendations: {[chatId: ChatId]: MaybePromise<MessagesChats>};
   // * the paid messages price the full channel last named for this user (0 — exempt)
   private fullPaidMessagesStars: Map<ChatId, number> = new Map();
+  // * the admin behind a message posted as the channel, by `${chatId}_${mid}`: asked once a session,
+  // * an answer that did not come included (desktop's `LookupMessageAuthor`)
+  private messageAuthors: Map<string, Promise<PeerId>> = new Map();
 
   protected after() {
     this.clear(true);
@@ -285,10 +291,13 @@ export class AppChatsManager extends AppManager {
       const changedProfileSignatures = (oldChat as Chat.channel).pFlags.signature_profiles !== (chat as Chat.channel).pFlags.signature_profiles;
 
       const storiesCallback = this.appStoriesManager.saveApiPeerStories(chat as Chat.channel, oldChat as Chat.channel);
+      // Preserve notifications for in-place mutations; a separate normalized payload can
+      // prove that a repeated history/profile response did not change this peer.
+      const unchanged = oldChat !== chat && deepEqual(oldChat, chat);
 
       safeReplaceObject(oldChat, chat);
       this.mirrorChat(oldChat);
-      this.rootScope.dispatchEvent('chat_update', chat.id);
+      if(!unchanged) this.rootScope.dispatchEvent('chat_update', chat.id);
 
       storiesCallback?.();
 
@@ -389,7 +398,40 @@ export class AppChatsManager extends AppManager {
    * @returns
    */
   public hasRights(id: ChatId, action: ChatRights, rights?: ChatAdminRights | ChatBannedRights, isThread?: boolean) {
-    return hasRights(this.getChat(id), action, rights, isThread);
+    // * what the member sends is let past the group's own restrictions once their boosts are enough, wherever it
+    // * is asked (tdesktop's unrestrictedByBoosts in amRestricted)
+    const defaultBansLifted = rights === undefined && isSendRight(action) && this.isRestrictionLiftedByBoosts(id, action);
+    return hasRights(this.getChat(id), action, rights, isThread, defaultBansLifted);
+  }
+
+  /**
+   * Whether boosts can let the member past the group's own restriction of `action` (no `action`: slow mode's
+   * wait), as iOS and Android have it: a supergroup that asks for boosts to lift them — not a broadcast group,
+   * where only admins write — and never past a ban of the member's own. Read from the full chat already fetched
+   */
+  public canBoostsLiftRestriction(id: ChatId, action?: ChatRights) {
+    const chat = this.getChat(id) as Chat.channel;
+    if(
+      chat?._ !== 'channel' ||
+      !chat.pFlags.megagroup ||
+      chat.pFlags.gigagroup ||
+      (action && chat.banned_rights?.pFlags[action as keyof ChatBannedRights['pFlags']])
+    ) {
+      return false;
+    }
+
+    const channelFull = this.appProfileManager.getCachedFullChat(id) as ChatFull.channelFull;
+    return !!channelFull?.boosts_unrestrict;
+  }
+
+  // * a member who has given the group as many boosts as it asks for is let past what boosts can lift
+  public isRestrictionLiftedByBoosts(id: ChatId, action?: ChatRights) {
+    if(!this.canBoostsLiftRestriction(id, action)) {
+      return false;
+    }
+
+    const channelFull = this.appProfileManager.getCachedFullChat(id) as ChatFull.channelFull;
+    return (channelFull.boosts_applied || 0) >= channelFull.boosts_unrestrict;
   }
 
   public editChatDefaultBannedRights(id: ChatId, banned_rights: ChatBannedRights) {
@@ -490,6 +532,27 @@ export class AppChatsManager extends AppManager {
     if(chat?._ !== 'channel') return false;
 
     return !!(chat.admin_rights?.pFlags?.manage_direct_messages);
+  }
+
+  /**
+   * Who of the admins wrote a message of the channel's direct messages posted as the channel, for
+   * an admin to see (`channels.getMessageAuthor`); nothing when the server does not say
+   */
+  public getMessageAuthor(chatId: ChatId, mid: number) {
+    const key = `${chatId}_${mid}`;
+    let promise = this.messageAuthors.get(key);
+    if(!promise) {
+      promise = this.apiManager.invokeApi('channels.getMessageAuthor', {
+        channel: this.getChannelInput(chatId),
+        id: getServerMessageId(mid)
+      }).then((user) => {
+        this.appUsersManager.saveApiUser(user);
+        return user._ === 'user' ? user.id.toPeerId(false) : undefined;
+      }, (): PeerId => undefined);
+      this.messageAuthors.set(key, promise);
+    }
+
+    return promise;
   }
 
   /**
@@ -845,7 +908,8 @@ export class AppChatsManager extends AppManager {
     const peerId = getParticipantPeerId(participant);
     const userId = peerId.toUserId();
     const makingAdmin = Object.keys(rights.pFlags).length > 0;
-    const canStickToLegacy = !rank && (!makingAdmin || deepEqual(rights, CHAT_LEGACY_ADMIN_RIGHTS));
+    // * a tag no longer needs a supergroup: a basic group keeps it apart from the rights (as desktop does)
+    const canStickToLegacy = !makingAdmin || deepEqual(rights, CHAT_LEGACY_ADMIN_RIGHTS);
 
     if(!wasChannel && canStickToLegacy) {
       const editChatAdmin = () => this.apiManager.invokeApi('messages.editChatAdmin', {
@@ -876,6 +940,11 @@ export class AppChatsManager extends AppManager {
         is_admin: makingAdmin,
         version: 0
       });
+
+      const prevRank = typeof(participant) === 'object' ? (participant as ChatParticipant.chatParticipant).rank : undefined;
+      if(makingAdmin && rank !== (prevRank || '')) {
+        await this.editParticipantRank(id, peerId, rank);
+      }
 
       return id;
     }
@@ -920,6 +989,21 @@ export class AppChatsManager extends AppManager {
     return returnParticipant ? update.new_participant : id;
   }
 
+  /**
+   * Sets a member tag, or removes it with an empty string. Not optimistic: the caches change once the server accepts
+   */
+  public async editParticipantRank(id: ChatId, peerId: PeerId, rank: string) {
+    const updates = await this.apiManager.invokeApi('messages.editChatParticipantRank', {
+      peer: this.appPeersManager.getInputPeerById(id.toPeerId(true)),
+      participant: this.appPeersManager.getInputPeerById(peerId),
+      rank
+    });
+
+    this.apiUpdatesManager.processUpdateMessage(updates);
+    // * the answer for a supergroup may carry no update of the tag
+    this.appProfileManager.applyParticipantRank(id, peerId.toUserId(), rank);
+  }
+
   public editPhoto(id: ChatId, upload?: InputFile | ChatPhotoUpload) {
     const inputChatPhoto: InputChatPhoto = upload ? {
       _: 'inputChatUploadedPhoto',
@@ -930,7 +1014,19 @@ export class AppChatsManager extends AppManager {
       _: 'inputChatPhotoEmpty'
     };
 
-    let promise: any;
+    return this.setChatPhoto(id, inputChatPhoto);
+  }
+
+  /** One of the chat's earlier photos made its photo again ("Set as Main") */
+  public setExistingPhoto(id: ChatId, photoId: Photo.photo['id']) {
+    return this.setChatPhoto(id, {
+      _: 'inputChatPhoto',
+      id: getPhotoInput(this.appPhotosManager.getPhoto(photoId))
+    });
+  }
+
+  private setChatPhoto(id: ChatId, inputChatPhoto: InputChatPhoto) {
+    let promise: Promise<Updates>;
     if(this.isChannel(id) || this.isCommunity(id)) {
       promise = this.apiManager.invokeApi('channels.editPhoto', {
         channel: this.getChannelInput(id),
@@ -1028,6 +1124,8 @@ export class AppChatsManager extends AppManager {
         banned_rights: bannedRights,
         kicked_by: this.appUsersManager.getSelf().id,
         peer: this.appPeersManager.getOutputPeer(peerId),
+        // * a restriction leaves the member's tag where it was
+        rank: isObject(participant) ? (participant as ChannelParticipant.channelParticipant).rank : undefined,
         pFlags: bannedRights.pFlags.view_messages ? {left: true} : {}
       } : undefined
     });
@@ -1309,6 +1407,43 @@ export class AppChatsManager extends AppManager {
       approved
     }).then((updates) => {
       return this.onChatUpdated(chatId, updates, true);
+    });
+  }
+
+  /**
+   * Approves or dismisses every pending join request at once, or only those that came through
+   * `link`. The pending counter is the server's: its `updatePendingJoinRequests` when the answer carries
+   * one, else the queue read anew - never put at zero, which a request that came meanwhile contradicts.
+   */
+  public hideAllChatJoinRequests(chatId: ChatId, approved: boolean, link?: string) {
+    return this.apiManager.invokeApi('messages.hideAllChatJoinRequests', {
+      peer: this.appChatsManager.getInputPeer(chatId),
+      approved,
+      link
+    }).then((updates) => {
+      this.onChatUpdated(chatId, updates, true);
+      const peerId = chatId.toPeerId(true);
+      const counted = getUpdatesList(updates).some((update) => {
+        return update._ === 'updatePendingJoinRequests' && getPeerId(update.peer) === peerId;
+      });
+
+      if(!counted) {
+        // * not waited for: the requests are answered already
+        this.appChatInvitesManager.reloadPendingJoinRequests(chatId).catch(noop);
+      }
+    });
+  }
+
+  public updateEmojiStatus(chatId: ChatId, emojiStatus: EmojiStatus) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'channels.updateEmojiStatus',
+      params: {
+        channel: this.getChannelInput(chatId),
+        emoji_status: emojiStatus
+      },
+      processResult: (updates) => {
+        this.apiUpdatesManager.processUpdateMessage(updates);
+      }
     });
   }
 

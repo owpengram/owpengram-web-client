@@ -6,7 +6,6 @@
  */
 
 import type {TrueDcId} from '@types';
-import langPackLocalVersion from '@/langPackLocalVersion';
 
 // Empty for a self-hosted build: nothing it is served from is an official
 // Telegram domain, so the "main domain" branch below -- which swaps in
@@ -25,7 +24,6 @@ const App = {
   versionFull: import.meta.env.VITE_VERSION_FULL,
   build: +import.meta.env.VITE_BUILD,
   langPackVersion: +import.meta.env.VITE_LANG_PACK_VERSION,
-  langPackLocalVersion: langPackLocalVersion,
   langPack: 'webk',
   langPackCode: 'en',
   domains: MAIN_DOMAINS,
@@ -37,6 +35,11 @@ const App = {
   cryptoWorkers: threads,
   interclientBroadcastChannel: 'tgweb'
 };
+
+// * "Telegram WebK 2.2 (681)" - how the app names itself, in the main menu and under Settings
+export function getAppVersionText() {
+  return `Telegram Web${App.suffix} ${App.version} (${App.build})`;
+}
 
 if(App.isMainDomain) { // use Webogram credentials then
   App.id = 2496;

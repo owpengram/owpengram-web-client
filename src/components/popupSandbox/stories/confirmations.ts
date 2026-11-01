@@ -113,6 +113,14 @@ defineStories('Confirmations', [
     }
   },
   {
+    id: 'blockUser/fromReplies',
+    title: 'Block the one who replied — from the Replies chat',
+    open: async(ctx) => {
+      const {default: blockUserWithConfirmation} = await import('@components/blockUser');
+      blockUserWithConfirmation({peerId: ctx.peer('private'), fromRepliesMid: ctx.mid('private')}).catch(noop);
+    }
+  },
+  {
     id: 'sendNow/one',
     title: 'Send scheduled message now',
     open: async(ctx) => {
@@ -145,6 +153,20 @@ defineStories('Confirmations', [
   {
     id: 'mute/peer',
     title: 'Mute chat',
+    managers: {
+      appNotificationsManager: {isPeerSoundOff: () => false}
+    },
+    open: async(ctx) => {
+      const {default: showMutePopup} = await import('@components/popups/mute');
+      showMutePopup(ctx.peer('private'));
+    }
+  },
+  {
+    id: 'mute/peer-sound-off',
+    title: 'Mute chat — its sound off',
+    managers: {
+      appNotificationsManager: {isPeerSoundOff: () => true}
+    },
     open: async(ctx) => {
       const {default: showMutePopup} = await import('@components/popups/mute');
       showMutePopup(ctx.peer('private'));
@@ -175,3 +197,7 @@ defineStories('Confirmations', [
     }
   }
 ]);
+
+// The sandbox reloads on an edit anyway (watchForEdits). Accepting here keeps an edit of a popup this story imports
+// from climbing through the story to the app's root once the sandbox has been opened on the dev server.
+if(import.meta.hot) import.meta.hot.accept();

@@ -1,6 +1,5 @@
 import ctx from '@environment/ctx';
 import callbackify from '@helpers/callbackify';
-import {ignoreRestrictionReasons} from '@helpers/restrictions';
 import {Config, DataJSON, HelpAppConfig, HelpPeerColors, MethodDeclMap, User} from '@layer';
 import {InvokeApiOptions} from '@types';
 import {AppManager} from '@appManagers/manager';
@@ -326,7 +325,6 @@ export default abstract class ApiManagerMethods extends AppManager {
 
   private applyAppConfig(appConfig: MTAppConfig, save?: boolean) {
     this.appConfig = appConfig;
-    ignoreRestrictionReasons(appConfig.ignore_restriction_reasons ?? []);
 
     if(save) {
       appConfig.cachedTime = Date.now();
@@ -359,6 +357,16 @@ export default abstract class ApiManagerMethods extends AppManager {
       },
       options: {overwrite}
     });
+  }
+
+  /** The DC this connection landed on, the one nearest to the user, and the user's country by IP */
+  public getNearestDc() {
+    return this.invokeApi('help.getNearestDc');
+  }
+
+  /** What the server has to say about a `tg://` link this client does not know (tdesktop's `requestDeepLinkInfo`). */
+  public getDeepLinkInfo(path: string) {
+    return this.invokeApiSingle('help.getDeepLinkInfo', {path});
   }
 
   public getTimezonesList() {
