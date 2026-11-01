@@ -173,13 +173,24 @@ $corner-button-size: 2.5rem;
 
 // Phone-number row in the AuthCode header — wrapped by <MediaHeader.Title>,
 // so it renders inside the title's text-center container.
+//
+// The row is also where an e-mail address goes, which can be far wider than
+// the card: rather than breaking it mid-word, the text stays on one line and
+// shrinks to the row's width. `--chars` is the shown text's length (set by
+// the card); an average glyph is about .6em wide, and the pencil takes ~2rem.
 .phoneWrapper {
   display: flex;
   align-items: center;
   justify-content: center;
+  container-type: inline-size;
 
   .phone {
     margin: 0;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: min(1em, calc((100cqi - 2rem) / (var(--chars, 1) * .6)));
 
     &:global(.error) {
       border-color: var(--danger-color) !important;

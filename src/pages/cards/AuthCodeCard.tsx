@@ -526,6 +526,7 @@ export default function AuthCodeCard(props: {spec: Spec}) {
 
     // an address that was sent as a synthetic number is shown as the address
     phoneEl.innerText = getPhoneForDisplay(sentCode.phone_number ?? '');
+    phoneEl.style.setProperty('--chars', '' + phoneEl.innerText.length);
     setErrorContent(undefined);
     setSubmitting(false);
 
