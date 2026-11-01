@@ -120,7 +120,8 @@ browser's console. Local storage and IndexedDB snapshots are covered by the
 - 🚀 [Server](https://github.com/owpengram/owpengram-server)
 - 🤖 [Android client](https://github.com/owpengram/owpengram-android-client)
 - 💻 [Desktop client](https://github.com/owpengram/owpengram-desktop-client)
-- 🌐 [GitHub organization](https://github.com/owpengram)
+- 🎁 [Gift packs](https://github.com/owpengram/owpengram-giftpacks)
+- 🏢 [GitHub organization](https://github.com/owpengram)
 
 ## 💬 Community
 
