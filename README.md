@@ -1,38 +1,130 @@
-## Telegram Web K
-Based on Webogram, patched and improved. Available for everyone here: https://web.telegram.org/k/
+<p align="center">
+  <img src="media/readme/owpengram_splash.png" alt="OwpenGram" width="440">
+</p>
 
+# 🌐 OwpenGram for Web
 
-### Developing
-Install dependencies with:
-```lang=bash
+**One familiar app. Any server you trust.**
+
+OwpenGram for Web is the browser client of the OwpenGram project: a fast,
+familiar messenger that talks to a server you run yourself. Nothing to install
+for the people who use it — they open the address of your server and sign in.
+Private by design, comfortable to use, and free from lock-in.
+
+> 🌐 **Served by the server itself** — [owpengram-server](https://github.com/owpengram/owpengram-server)
+> carries this client inside its binary and serves it on its own address. You
+> can also host it separately and point it at a server.
+
+> 🔗 Built on **MTProto API layer 229**, on top of Telegram Web K
+> ([tweb](https://github.com/morethanwords/tweb)).
+
+---
+
+## 🚀 Try it without setting up anything
+
+Every OwpenGram server carries this web client, so the quickest way in is a
+browser: open the server's address and sign in, nothing to install. To run your
+own server, which brings its own copy of the client, see
+[owpengram-server](https://github.com/owpengram/owpengram-server).
+
+## ✨ Why you'll like it
+
+- 🧩 **Nothing to install** — it is a web page; any modern browser will do.
+- 🏠 **Bring your own server** — the page finds its server from where it was served, with no address to type.
+- 🔑 **Key handled for you** — the embedded build reads the server's RSA key itself when it starts.
+- 🧠 **Familiar & comfortable** — the experience you already know, no learning curve.
+- 🔒 **Private** — talk on infrastructure you trust, away from the cloud.
+- 🛡️ **Censorship-resistant** — your own server stays reachable when others are blocked.
+- 🆓 **Open source** — read it, audit it, build it yourself.
+
+## 🌐 One client, one server
+
+Unlike the desktop and Android apps, the web client is not multi-server: a page
+belongs to the server it talks to. Two ways to get it:
+
+- **Embedded (the usual way)** — [owpengram-server](https://github.com/owpengram/owpengram-server)
+  serves this client on its own address, the same port as the protocol
+  (`http://your-server:2398/` by default). The page needs no configuration: the
+  server is whoever served it, and the RSA key is read from that server on
+  start. Nothing else to host.
+- **Standalone** — build the client for one server and put it anywhere (your own
+  web server, a CDN). The server address, and optionally its key, are baked into
+  that build.
+
+A page served over `https` can only reach a server that terminates TLS itself or
+sits behind a reverse proxy; one served over `http` reaches a plaintext port.
+That is the browser's rule, not ours.
+
+Every OwpenGram server exposes its identity (name, description, icon) at
+`/owpengram/server-info`, and the page uses its icon on the sign-in screen. Servers
+that allow sign-up by email get an email field instead of a phone number.
+
+## 🛠️ Build and run
+
+Requirements: **Node** `^22.18.0 || >=24.11.0` and **pnpm**.
+
+```bash
 pnpm install
 ```
-This will install all the needed dependencies.
 
+One launcher does the rest on every platform — `owpengram-web.bat` on Windows,
+or `node scripts/owpengram-web.mjs`. It writes the server address into
+`.env.local` (gitignored), so pointing a checkout at another server never shows
+up as a local change.
 
-#### Running web-server
-Just run `pnpm start` to start the web server and the livereload task.
-Open http://localhost:8080/ in your browser.
+```bash
+node scripts/owpengram-web.mjs                        # ask, then run
+node scripts/owpengram-web.mjs run --server 1.2.3.4:2398
+node scripts/owpengram-web.mjs build --fetch-key      # standalone build
+node scripts/owpengram-web.mjs build --fast           # skip tests and typecheck
+node scripts/owpengram-web.mjs embed                  # build INTO owpengram-server
+```
 
+`run` starts the dev server at http://localhost:8080/ with live reload. `build`
+makes the minified standalone version in `dist/`; copy it to your web server.
 
-#### Running in production
+`embed` is the build the server carries. It needs no address and no key, and it
+copies the result into your `owpengram-server` checkout — rebuild the server
+afterwards to pick it up. (The result is large, so it is not committed; a server
+built without it serves no web client.)
 
-Run `node build` to build the minimized production version of the app. Copy `public` folder contents to your web server.
+Plain upstream commands still work too: `pnpm start` runs Vite, and
+`docker-compose up tweb.production -d` serves a build through nginx.
 
-### Running in docker
+## 🧪 Debugging
 
-#### Developing: 
-* Install dependencies `docker-compose up tweb.dependencies`.
-* Run develop container `docker-compose up tweb.develop `.
-* Open http://localhost:8080/ in your browser. 
+There are classes bound to the global context: look through the code for the one
+you need and get it by its name in the developer tools. Source maps are included
+in the production build.
 
-#### Production:
-* Run `docker-compose up tweb.production -d` nginx image and container to serve the build
-* Open http://localhost:80/ in your browser.
+Query parameters, e.g. `http://localhost:8080/?debug=1`:
 
-You can use `docker build -f ./.docker/Dockerfile_production -t {dockerhub-username}/{imageName}:{latest} .` to build your production ready image.
+* **debug=1**: additional logging
+* **noSharedWorker=1**: disable the Shared Worker
+* **http=1**: force the HTTPS transport
 
-### Dependencies
+You can see all the available svg icons by calling `showIconLibrary()` in the
+browser's console. Local storage and IndexedDB snapshots are covered by the
+[`snapshot-server`](snapshot-server/README.md) mini-app.
+
+## 📦 Part of the OwpenGram project
+
+- 🚀 [Server](https://github.com/owpengram/owpengram-server)
+- 🤖 [Android client](https://github.com/owpengram/owpengram-android-client)
+- 💻 [Desktop client](https://github.com/owpengram/owpengram-desktop-client)
+- 🌐 [GitHub organization](https://github.com/owpengram)
+
+## 💬 Community
+
+- 📢 Channel: [@owpengram](https://t.me/owpengram)
+- 💬 Chat: [Join the discussion](https://t.me/+sVB6Ymv70jEwNTAy)
+
+## 📄 License
+
+Based on [Telegram Web K](https://github.com/morethanwords/tweb) (Webogram,
+patched and improved) — licensed under **GNU GPL v3** ([LICENSE](LICENSE)).
+
+### Third-party
 * [BigInteger.js](https://github.com/peterolson/BigInteger.js) ([Unlicense](https://github.com/peterolson/BigInteger.js/blob/master/LICENSE))
 * [fflate](https://github.com/101arrowz/fflate) ([MIT License](https://github.com/101arrowz/fflate/blob/master/LICENSE))
 * [cryptography](https://github.com/spalt08/cryptography) ([Apache License 2.0](https://github.com/spalt08/cryptography/blob/master/LICENSE))
@@ -49,28 +141,6 @@ You can use `docker build -f ./.docker/Dockerfile_production -t {dockerhub-usern
 * [Mediabunny](https://github.com/Vanilagy/mediabunny) ([Mozilla Public License 2.0](https://github.com/Vanilagy/mediabunny/blob/main/LICENSE))
 * [Temml](https://github.com/ronkok/Temml) ([MIT License](https://github.com/ronkok/Temml/blob/main/LICENSE))
 
-### Debugging
-You are welcome in helping to minimize the impact of bugs. There are classes, binded to global context. Look through the code for certain one and just get it by its name in developer tools.
-Source maps are included in production build for your convenience.
+---
 
-#### Additional query parameters
-* **test=1**: to use test DCs
-* **debug=1**: to enable additional logging
-* **noSharedWorker=1**: to disable Shared Worker, can be useful for debugging
-* **http=1**: to force the use of HTTPS transport when connecting to Telegram servers
-
-Should be applied like that: http://localhost:8080/?test=1
-
-#### Taking local storage snapshots
-You can also take and load snapshots of the local storage and indexed DB using the `./snapshot-server` [mini-app](/snapshot-server/README.md). Check the `README.md` under this folder for more details.
-
-#### Preview all icons
-You can see all the available svg icons by calling the `showIconLibrary()` global function in the browser's console.
-
-### Troubleshooting & Suggesting
-
-If you find an issue with this app or wish something to be added, let Telegram know using the [Suggestions Platform](https://bugs.telegram.org/c/4002).
-
-### Licensing
-
-The source code is licensed under GPL v3. License is available [here](/LICENSE).
+⭐ If OwpenGram is useful to you, a star on GitHub helps a lot.
