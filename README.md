@@ -11,7 +11,10 @@ familiar messenger that talks to a server you run yourself. Nothing to install
 for the people who use it — they open the address of your server and sign in.
 Private by design, comfortable to use, and free from lock-in.
 
-> 🌐 **Served by the server itself** — [owpengram-server](https://github.com/owpengram/owpengram-server)
+> 🌐 **Open it now** — the public OwpenGram server's web client is live at
+> [web.owpengram.org](https://web.owpengram.org). Nothing to install.
+
+> 🏠 **Or serve it yourself** — [owpengram-server](https://github.com/owpengram/owpengram-server)
 > carries this client inside its binary and serves it on its own address. You
 > can also host it separately and point it at a server.
 
@@ -22,10 +25,13 @@ Private by design, comfortable to use, and free from lock-in.
 
 ## 🚀 Try it without setting up anything
 
-Every OwpenGram server carries this web client, so the quickest way in is a
-browser: open the server's address and sign in, nothing to install. To run your
-own server, which brings its own copy of the client, see
-[owpengram-server](https://github.com/owpengram/owpengram-server).
+We run a **public OwpenGram server**, and its web client is open in any
+browser: go to **[web.owpengram.org](https://web.owpengram.org)** and sign in. No
+install, no key to paste, no Docker.
+
+Want your own? Every OwpenGram server carries its own copy of this client, so
+running [owpengram-server](https://github.com/owpengram/owpengram-server) gives
+you the web version at your own address.
 
 ## ✨ Why you'll like it
 
