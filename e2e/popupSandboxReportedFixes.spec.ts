@@ -232,3 +232,74 @@ test('a media editor text layer outlines its text as text', async({page}) => {
   await expect(layer.locator('img')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).copiedMarkupRan)).toBeUndefined();
 });
+
+// * the strip of sticker sets is built off the tab's tree and moved under the editor's tabs: looked up through the
+// * strip's own ownerDocument (a template's, while the strip is in no document) the tabs were never found, and the tab
+// * showed an empty band above its search
+test('the media editor\'s stickers tab puts its sticker sets under the tabs', async({page}) => {
+  test.setTimeout(120_000);
+  const editor = await openMediaEditor(page);
+  await editor.getByRole('tab', {name: 'Stickers', exact: true}).click();
+  const strip = editor.locator('.media-editor__tabs > .media-editor__stickers-thumb-list-scrollable');
+  await expect(strip).toHaveCount(1);
+  // * beside the tablist, never in it: its buttons are no tabs
+  await expect(editor.locator('[role="tablist"] .media-editor__stickers-thumb-list-scrollable')).toHaveCount(0);
+  // * the sandbox has no sets to show: the strip is hidden, and out of the keyboard's and the screen reader's way too
+  await expect(strip).toHaveClass(/stickers-thumb-list-scrollable--hidden/);
+  await expect(strip).toHaveJSProperty('inert', true);
+  await expect(strip).toHaveAttribute('aria-hidden', 'true');
+});
+
+// * the sender's upgrade of a gift its recipient has already turned into Stars: the server keeps the upgrade link, the
+// * payment form for it is refused - and the button used to wait for that form for good. The own upgrade the same way
+for(const prepaid of [false, true]) test(`an upgrade${prepaid ? ' paid for someone else' : ''} whose payment form is refused says so and frees its button`, async({page}) => {
+  await preparePopupSandbox(page, false);
+  await page.evaluate(async(prepaid) => {
+    const {getMockManagers} = await window.e2eImport('/src/components/popupSandbox/environment.ts');
+    getMockManagers().override({appPaymentsManager: {getPaymentForm: () => Promise.reject({type: 'FORM_SUBMIT_FAILED'})}});
+    const {default: createStarGiftUpgradePopup} = await window.e2eImport('/src/components/popups/starGiftUpgrade.tsx');
+    const {myStarGift, CONTACT_USER_ID} = await window.e2eImport('/src/components/popupSandbox/fixtures.ts');
+    createStarGiftUpgradePopup(prepaid ? {
+      gift: {...myStarGift, isIncoming: false, saved: {...myStarGift.saved, prepaid_upgrade_hash: 'hash'}},
+      descriptionForPeerId: CONTACT_USER_ID.toPeerId()
+    } : {gift: myStarGift});
+  }, prepaid);
+
+  const upgrade = page.locator('.popup-star-gift-upgrade.active .popup-footer-button');
+  await expect(upgrade).toContainText(/upgrade/i);
+  await upgrade.click();
+  await expect(page.locator('.toast')).toContainText('An error occurred');
+  await expect(upgrade).toBeEnabled();
+  await expect(page.locator('.popup-star-gift-upgrade.active')).toHaveCount(1);
+});
+
+// * a refused request used to leave the button that sent it disabled for good, with no word of it
+test('showing my last seen time, refused, says so and frees its button', async({page}) => {
+  await preparePopupSandbox(page, false);
+  await page.evaluate(async() => {
+    const {getMockManagers} = await window.e2eImport('/src/components/popupSandbox/environment.ts');
+    getMockManagers().override({appPrivacyManager: {setPrivacy: () => Promise.reject({type: 'PRIVACY_TOO_LONG'})}});
+  });
+  expect(await openStory(page, 'toggleReadDate/lastSeen')).toBeNull();
+
+  const show = page.locator('.popup-toggle-read-date.active .popup-toggle-read-date-button').first();
+  await show.click();
+  await expect(page.locator('.toast')).toContainText('An error occurred');
+  await expect(show).toBeEnabled();
+  await expect(page.locator('.popup-toggle-read-date.active')).toHaveCount(1);
+});
+
+// * a payment form the server would not give was a press lost without a word
+test('a Premium gift whose payment form is refused says so and frees its button', async({page}) => {
+  await preparePopupSandbox(page, false);
+  await page.evaluate(async() => {
+    const {getMockManagers} = await window.e2eImport('/src/components/popupSandbox/environment.ts');
+    getMockManagers().override({appPaymentsManager: {getPaymentForm: () => Promise.reject({type: 'FORM_SUBMIT_FAILED'})}});
+  });
+  expect(await openStory(page, 'giftPremium')).toBeNull();
+
+  const gift = page.locator('.popup-gift-premium.active .popup-footer-button, .popup.active .popup-footer-button').first();
+  await gift.click();
+  await expect(page.locator('.toast')).toContainText('An error occurred');
+  await expect(gift).toBeEnabled();
+});

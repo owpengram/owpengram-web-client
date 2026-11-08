@@ -54,7 +54,7 @@ import {bindManagersToSession} from '@lib/accounts/bindManagersToAccount';
 const ROW_WITH_CHECKBOX_CLASS = 'selector-row-with-checkbox';
 
 export type SelectSearchPeerType = 'contacts' | 'dialogs' | 'channelParticipants' | 'custom';
-export type FilterPeerTypeByFunc = (peer: ReturnType<AppPeersManager['getPeer']>) => boolean;
+export type FilterPeerTypeByFunc = (peer: ReturnType<AppPeersManager['getPeer']>) => MaybePromise<boolean>;
 
 // TODO: правильная сортировка для addMembers, т.е. для peerType: 'contacts', потому что там идут сначала контакты - потом неконтакты, а должно всё сортироваться по имени
 
@@ -1029,6 +1029,10 @@ export default class AppSelectPeers {
     const {result, isEnd} = res;
 
     await this.renderResultsFunc(result);
+    // * a search typed meanwhile has a stage of its own to finish
+    if(!middleware()) {
+      return;
+    }
 
     if(isEnd) {
       this.loadedWhat.custom = true;
@@ -1055,7 +1059,14 @@ export default class AppSelectPeers {
     }
 
     if(this.peerType.includes('channelParticipants') && !this.loadedWhat.channelParticipants) {
-      return this.getMoreSomething('channelParticipants');
+      // * the next stage starts where the members end, as contacts follow dialogs: a list the members
+      // left empty never scrolls to ask for it
+      const middleware = this.middlewareHelperLoader.get();
+      return this.getMoreSomething('channelParticipants').then(() => {
+        if(middleware() && this.loadedWhat.channelParticipants) {
+          return this._getMoreResults();
+        }
+      });
     }
 
     if(this.peerType.includes('custom') && !this.loadedWhat.custom) {

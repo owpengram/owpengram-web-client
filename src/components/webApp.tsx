@@ -17,7 +17,8 @@ import {TelegramWebViewEventMap, AnyFunction, TelegramWebViewSendEventMap} from 
 import ButtonTsx from '@components/buttonTsx';
 import {ButtonMenuItemOptionsVerifiable} from '@components/buttonMenu';
 import confirmationPopup from '@components/confirmationPopup';
-import showPeerPopup, {PopupPeerOptions} from '@components/popups/peer';
+import requestPhone from '@components/requestPhone';
+import showPeerPopup, {PopupPeerHandle, PopupPeerOptions} from '@components/popups/peer';
 import {showPickUser3Popup} from '@components/popups/pickUser';
 import selectRequestPeers from '@components/popups/requestPeer';
 import TelegramWebView from '@components/telegramWebView';
@@ -58,7 +59,9 @@ const SANDBOX_ATTRIBUTES = [
   'allow-popups',
   'allow-forms',
   'allow-modals',
-  'allow-storage-access-by-user-activation'
+  'allow-storage-access-by-user-activation',
+  // * a 3D game made as a mini app captures the mouse as one sent as a game does (GAME_SANDBOX_ATTRIBUTES)
+  'allow-pointer-lock'
 ].join(' ');
 
 const DEVICEMOTION_TIMEOUT = 500;
@@ -81,6 +84,8 @@ export default class WebApp {
   private attachMenuBot: AttachMenuBot;
   private botInfo: BotInfo.botInfo;
   private isCloseConfirmationNeeded: boolean;
+  // * the user's close waiting for their word: the app closing itself meanwhile takes it away with it
+  private closeConfirmation: PopupPeerHandle;
   private lastHeaderColor: TelegramWebViewEventMap['web_app_set_header_color'];
   private showSettingsButton: boolean;
   private readyResult: TelegramWebViewEventMap['iframe_ready'];
@@ -103,7 +108,9 @@ export default class WebApp {
 
   private fullscreenButtons: HTMLElement;
 
-  private forceHide: () => void;
+  // * `byApp`: the app closes itself (web_app_close, its data or message sent, ...), which asks nothing - as tdesktop's
+  // * requestClose: only a close the user asks for confirms, when the app wants it (web_app_setup_closing_behavior)
+  private forceHide: (byApp?: boolean) => void;
   private onBackStatus: (visible: boolean) => void;
 
   private managers: AppManagers;
@@ -161,7 +168,7 @@ export default class WebApp {
       const queryId = this.webViewResultUrl.query_id;
       this.listenerSetter.add(rootScope)('web_view_result_sent', (_queryId) => {
         if(queryId === _queryId) {
-          this.forceHide();
+          this.forceHide(true);
         }
       });
     }
@@ -186,7 +193,7 @@ export default class WebApp {
     }
 
     this.joinChatDecisionHandled = true;
-    this.forceHide();
+    this.forceHide(true);
   };
 
   // the origin the bot asked the mini app to stay on, when it asked at all — the bridge is bound to
@@ -378,7 +385,8 @@ export default class WebApp {
       button: {
         isDanger: true,
         langKey: 'BotWebViewCloseAnyway'
-      }
+      },
+      onPopup: (popup) => this.closeConfirmation = popup
     });
   };
 
@@ -536,7 +544,7 @@ export default class WebApp {
       return;
     }
 
-    this.forceHide();
+    this.forceHide(true);
 
     const chat = hotReloadGuard.appImManager.chat;
     let peerId = chat.peerId, threadId = chat.threadId;
@@ -623,14 +631,16 @@ export default class WebApp {
     }
 
     this.destroyed = true;
+    this.closeConfirmation?.hide();
     this.telegramWebView?.destroy();
     this.listenerSetter.removeAll();
     clearTimeout(this.reloadTimeout);
     clearTimeout(this._deviceMotionTimeoutId);
     clearTimeout(this._deviceOrientationTimeoutId);
-    window.removeEventListener('devicemotion', this.handleDeviceMotion);
-    window.removeEventListener('deviceorientation', this.handleDeviceOrientation);
-    window.removeEventListener('deviceorientationabsolute', this.handleDeviceOrientation);
+    // * removed as they were added, in the capture phase: a listener removed without it stays
+    window.removeEventListener('devicemotion', this.handleDeviceMotion, true);
+    window.removeEventListener('deviceorientation', this.handleDeviceOrientation, true);
+    window.removeEventListener('deviceorientationabsolute', this.handleDeviceOrientation, true);
     this.footerCleanup?.();
   }
 
@@ -730,6 +740,7 @@ export default class WebApp {
             pattern = [65, 60, 40];
             break;
         }
+        break;
       case 'selection_change':
         pattern = [30];
         break;
@@ -968,7 +979,7 @@ export default class WebApp {
   }
 
   protected setupDeviceMotion() {
-    window.removeEventListener('devicemotion', this.handleDeviceMotion);
+    window.removeEventListener('devicemotion', this.handleDeviceMotion, true);
     clearTimeout(this._deviceMotionTimeoutId);
 
     if(this._gyroscopeFreqMs !== -1 || this._accelerometerFreqMs !== -1) {
@@ -992,6 +1003,11 @@ export default class WebApp {
 
     const {telegramWebView, webViewOptions} = this;
     const managers = bindManagersToSession(this.managers);
+    // * a refused request lets the next one through: left pending, every later one would go unanswered
+    const cancel = () => {
+      this._fileDownloadPending = false;
+      telegramWebView.dispatchWebViewEvent('file_download_requested', {status: 'cancelled'});
+    };
 
     try {
       const allow = await managers.appBotsManager.checkDownloadFileParams(
@@ -1001,11 +1017,11 @@ export default class WebApp {
       );
 
       if(!allow) {
-        telegramWebView.dispatchWebViewEvent('file_download_requested', {status: 'cancelled'});
+        cancel();
         return;
       }
     } catch(e) {
-      telegramWebView.dispatchWebViewEvent('file_download_requested', {status: 'cancelled'});
+      cancel();
       return;
     }
 
@@ -1051,8 +1067,7 @@ export default class WebApp {
       ],
       onClose: () => {
         if(this._fileDownloadPending) {
-          this._fileDownloadPending = false;
-          telegramWebView.dispatchWebViewEvent('file_download_requested', {status: 'cancelled'});
+          cancel();
         }
       }
     });
@@ -1088,11 +1103,11 @@ export default class WebApp {
           return;
         }
 
-        this.forceHide();
+        this.forceHide(true);
         this.managers.appAttachMenuBotsManager.sendWebViewData(this.webViewOptions.botId, this.webViewOptions.buttonText, data);
       },
       web_app_close: () => {
-        this.forceHide();
+        this.forceHide(true);
       },
       web_app_open_link: ({url}) => {
         this.managers.apiManager.getAppConfig().then((config) => {
@@ -1112,13 +1127,14 @@ export default class WebApp {
           slug
         };
 
+        const onInvoiceClosed = (status: TelegramWebViewSendEventMap['invoice_closed']['status']) => {
+          telegramWebView.dispatchWebViewEvent('invoice_closed', {slug, status});
+        };
+
         hotReloadGuard.internalLinkProcessor.processInvoiceLink(link).then((popupPayment) => {
-          popupPayment.addEventListener('finish', (result) => {
-            telegramWebView.dispatchWebViewEvent('invoice_closed', {
-              slug,
-              status: result
-            });
-          });
+          popupPayment.addEventListener('finish', onInvoiceClosed);
+        }, () => { // * an invoice that does not open (a bad slug, a form the server refuses) is a failed one, as in tdesktop
+          onInvoiceClosed('failed');
         });
       },
       web_app_request_theme: this.sendTheme,
@@ -1160,9 +1176,12 @@ export default class WebApp {
       web_app_request_phone: this.debouncePopupMethod(async() => {
         const status: TelegramWebViewSendEventMap['phone_requested'] = {status: 'sent'};
         try {
-          const botId = this.webViewOptions.botId;
-          await this.managers.appMessagesManager.unblockBot(botId);
-          await hotReloadGuard.appImManager.requestPhone({peerId: botId.toPeerId(false)});
+          // * a bot the user blocked is unblocked only once they agree to share the number, never by the app's asking
+          await requestPhone({
+            managers: this.managers,
+            peerId: this.webViewOptions.botId.toPeerId(false),
+            unblockBot: true
+          });
         } catch(err) {
           status.status = 'cancelled';
         }
@@ -1258,7 +1277,7 @@ export default class WebApp {
       web_app_stop_device_orientation: () => {
         this._deviceOrientationFreqMs = -1;
         const eventName = this._deviceOrientationAbsolute ? 'deviceorientationabsolute' : 'deviceorientation';
-        window.removeEventListener(eventName, this.handleDeviceOrientation);
+        window.removeEventListener(eventName, this.handleDeviceOrientation, true);
         this.telegramWebView.dispatchWebViewEvent('device_orientation_stopped', undefined);
         clearTimeout(this._deviceOrientationTimeoutId);
       },
@@ -1337,7 +1356,7 @@ export default class WebApp {
               this.telegramWebView.dispatchWebViewEvent('prepared_message_failed', {error});
             } else {
               this.telegramWebView.dispatchWebViewEvent('prepared_message_sent', undefined);
-              this.forceHide();
+              this.forceHide(true);
             }
           }
         });
@@ -1528,7 +1547,7 @@ export default class WebApp {
       }
 
       if(err.type === 'QUERY_ID_INVALID') {
-        this.forceHide();
+        this.forceHide(true);
       } else {
         console.error('web app prolong error', err);
       }

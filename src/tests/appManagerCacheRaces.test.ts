@@ -176,6 +176,10 @@ function makeRichMessagesHarness() {
       resetPeerTranslationsByChannelCutoff: vi.fn(() => new Set<number>()),
       clearSummaries: vi.fn()
     },
+    appWidgetsManager: {
+      deleteWidgetStorage: vi.fn(),
+      deleteWidgetStorageByChannelCutoff: vi.fn()
+    },
     getMessageByPeer: vi.fn(),
     saveApiResult
   });
@@ -1998,6 +2002,7 @@ describe('manager cache race guards', () => {
           getFolderDialogs: (): any[] => []
         },
         appNotificationsManager: {getSettingsClock: () => 0},
+        appDraftsManager: {getDraftsClock: () => 0},
         appPeersManager: {getInputPeerById: () => ({_: 'inputPeerEmpty'})},
         saveApiResult
       });
@@ -2053,6 +2058,7 @@ describe('manager cache race guards', () => {
           updateForumTopicsPaginationOffsets
         },
         appNotificationsManager: {getSettingsClock: () => 0},
+        appDraftsManager: {getDraftsClock: () => 0},
         appPeersManager: {
           getInputPeerById: () => ({_: 'inputPeerEmpty'}),
           isChannel: () => true

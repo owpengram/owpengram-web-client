@@ -26,7 +26,8 @@ import wrapEmojiText from '@lib/richTextProcessor/wrapEmojiText';
 import I18n, {i18n} from '@lib/langPack';
 import {avatarNew} from '@components/avatarNew';
 import {getMiddleware} from '@helpers/middleware';
-import MovablePanel from '@helpers/movablePanel';
+import MovablePanel, {IS_MOVABLE_PANEL} from '@helpers/movablePanel';
+import appNavigationController, {NavigationItem} from '@components/appNavigationController';
 import {MovableState} from '@components/movableElement';
 import {Ref, resolveElements, resolveFirst} from '@solid-primitives/refs';
 import Section from '@components/section';
@@ -152,6 +153,15 @@ function BrowserHeaderTab(props: {
   );
 }
 
+/** The header's left button: the page's own back (a mini app's BackButton), or closing the page */
+function pressBrowserBack([state, actions]: BrowserContextValue) {
+  if(state.page.needBackButton) {
+    state.page.onBackClick();
+  } else {
+    actions.close(state.page);
+  }
+}
+
 function BrowserHeader(props: {
 }) {
   const [state, actions] = useContext(BrowserContext);
@@ -246,13 +256,7 @@ function BrowserHeader(props: {
     <div class={styles.BrowserHeader}>
       <BrowserHeaderButton
         aria-label={I18n.format(needBackButton() ? 'AccDescr.Back' : 'Close', true)}
-        onClick={() => {
-          if(needBackButton()) {
-            state.page.onBackClick();
-          } else {
-            actions.close(state.page);
-          }
-        }}
+        onClick={() => pressBrowserBack([state, actions])}
       >
         <div class={classNames('animated-close-icon', needBackButton() && 'state-back')}></div>
       </BrowserHeaderButton>
@@ -323,7 +327,7 @@ type BrowserContextState = {
 type BrowserContextActions = {
   add: (page: BrowserPageProps) => void,
   select: (page: BrowserPageProps | number) => void,
-  close: (page: BrowserPageProps) => void,
+  close: (page: BrowserPageProps, withoutConfirmation?: boolean) => Promise<void>,
   destroy: () => void,
   toggleCollapsed: (collapse?: boolean) => void,
   replace: (page: BrowserPageProps, originalPage: BrowserPageProps) => void,
@@ -387,13 +391,21 @@ function createBrowserStore(props: {
         });
       });
     },
-    close: async(page) => {
-      const index = state.pages.findIndex((_page) => _page.id === page.id);
-      if(index === -1) {
+    close: async(page, withoutConfirmation) => {
+      const findIndex = () => state.pages.findIndex((_page) => _page.id === page.id);
+      if(findIndex() === -1) {
         return;
       }
 
-      await page.isConfirmationNeededOnClose?.();
+      if(!withoutConfirmation) {
+        await page.isConfirmationNeededOnClose?.();
+      }
+
+      // * the user was asked meanwhile: the page may be gone (the app closed itself) or moved
+      const index = findIndex();
+      if(index === -1) {
+        return;
+      }
 
       if(state.pages.length === 1) {
         actions.destroy();
@@ -467,6 +479,22 @@ function Browser(props: {
   const minHeight = height * (minWidth / width) + additionalHeight;
 
   const [state, actions] = lastContext = useContext(BrowserContext);
+
+  // * where it cannot be moved (a touch screen) the browser stands over the app as a screen of its own: back
+  // * (the system's, a swipe, Escape) is its header button there, as on Android and iOS, and not the chat under it
+  if(!IS_MOVABLE_PANEL) {
+    const navigationItem: NavigationItem = {
+      type: 'browser',
+      onPop: () => {
+        if(state.destroyed || !state.page) return;
+        pressBrowserBack([state, actions]);
+        // * it stays until the browser itself goes: a mini app's back, a page of several, a close asked about
+        return false;
+      }
+    };
+    appNavigationController.pushItem(navigationItem);
+    onCleanup(() => appNavigationController.removeItem(navigationItem));
+  }
   const [movableState, setMovableState] = createSignal<MovableState>({
     width,
     height: height + additionalHeight
@@ -654,6 +682,7 @@ export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
     const page = lastContext[0].pages.find((page) => page.cacheKey === options.cacheKey);
     if(page) {
       lastContext[1].select(page);
+      lastContext[1].toggleCollapsed(false); // * opened again while minimized, it is shown, as a game is
       return;
     }
   }
@@ -662,13 +691,14 @@ export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
   const session = getAccountSession();
   const deferred = deferredPromise<void>();
   const [needBackButton, setNeedBackButton] = createSignal(false);
-  const [destroy, setDestroy] = createSignal(false);
+  // * who closes it: the app's own close asks nothing, and goes ahead even while the user is asked about theirs
+  const [destroy, setDestroy] = createSignal<false | 'user' | 'app'>(false);
   const webApp = new WebApp({
     ...options,
     header: document.createElement('div'),
     title: document.createElement('div'),
     body: document.createElement('div'),
-    forceHide: () => setDestroy(true),
+    forceHide: (byApp) => setDestroy((closing) => byApp ? 'app' : closing || 'user'),
     onBackStatus: setNeedBackButton
   });
 
@@ -716,8 +746,13 @@ export async function openWebAppInAppBrowser(options: WebAppLaunchOptions) {
     });
 
     createEffect(() => {
-      if(destroy()) {
-        lastContext[1].close(initialState);
+      const closing = destroy();
+      if(closing) {
+        // * a close the user declined (the app asked to confirm it) leaves the app open, and able to close itself
+        // * again: left set, the signal would never change, and this would never run again
+        lastContext[1].close(initialState, closing === 'app').catch(() => {
+          setDestroy((closing) => closing === 'user' ? false : closing);
+        });
       }
     });
 

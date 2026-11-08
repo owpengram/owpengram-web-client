@@ -455,21 +455,26 @@ test.describe('a message sent from the composer', () => {
       return {
         emoji: Array.from(bubble.querySelectorAll('custom-emoji-element')).map((element) => element.getBoundingClientRect().toJSON() as Rect),
         field: pictures('[class*="_fieldText_"]'),
-        bubble: pictures('[class*="_bubble_"]')
+        bubble: pictures('[class*="_bubble_"]'),
+        // * the field's text, laid out as the bubble's, flies all the way: the bubble's is not drawn over it a second time
+        fieldTextLands: overlay.querySelector<HTMLElement>('[class*="_bubble_"] [data-message-text-source]')?.style.visibility === 'hidden'
       };
     });
     sent.push(await sentMid(page));
 
-    // * the field's copy has them, and so has the bubble's, each one drawn over where its emoji is
+    // * the field's copy has them, and so has the bubble's - unless the field's text lands, and the bubble's is not drawn
+    // * a second time: each one drawn over where its emoji is, by the copy that lands
     expect(flown.emoji.length, 'the message has its custom emoji').toBe(inserted);
     expect(flown.field.length, 'the field\'s copy has them').toBe(inserted);
-    expect(flown.bubble.length, 'the bubble\'s copy has them').toBe(inserted);
+    expect(flown.bubble.length, flown.fieldTextLands ? 'the bubble\'s copy does not draw them again' : 'the bubble\'s copy has them')
+    .toBe(flown.fieldTextLands ? 0 : inserted);
     for(const [index, picture] of [...flown.field, ...flown.bubble].entries()) {
       expect(picture.drawn, `picture ${index} is drawn`).toBeGreaterThan(.05);
     }
 
+    const landing = flown.fieldTextLands ? flown.field : flown.bubble;
     flown.emoji.forEach((rect, index) => {
-      const picture = flown.bubble[index].rect;
+      const picture = landing[index].rect;
       expect(near(picture, rect, 1), `emoji ${index}: ${JSON.stringify(picture)} vs ${JSON.stringify(rect)}`).toBe(true);
     });
 
@@ -643,6 +648,36 @@ test.describe('a message sent from the composer', () => {
     await type(page, '😀😎👍');
     await page.keyboard.press('Enter');
     await expectOwnLanding(page);
+  });
+
+  // * a link whose preview the server has already comes back with it in the answer to the send, and no edit
+  // * follows: the bubble drawn before the answer takes the preview from the answer itself
+  test('shows the preview of a link the server knows as soon as it is sent', async({page}) => {
+    await openSavedMessages(page);
+    const url = 'https://telegram.org/blog/instant-view';
+    const sendLink = () => page.evaluate((url) => new Promise<number>((resolve) => {
+      const {appImManager, rootScope} = window as any;
+      const onSent = ({message}: {message: {mid: number, message: string}}) => {
+        if(message.message !== url) return;
+        rootScope.removeEventListener('message_sent', onSent);
+        resolve(message.mid);
+      };
+      rootScope.addEventListener('message_sent', onSent);
+      // * from the manager, as a send before the composer has the preview: the message goes without one
+      appImManager.managers.appMessagesManager.sendText({peerId: rootScope.myId, text: url});
+    }), url);
+    const hasPreview = (mid: number) => page.waitForFunction((mid) => (
+      !!document.querySelector(`#column-center .bubble[data-mid="${mid}"] .webpage`)
+    ), mid, {timeout: 10_000});
+
+    // * the first send has the server fetch the preview, if it has not yet
+    const first = await sendLink();
+    sent.push(first);
+    await hasPreview(first);
+
+    const second = await sendLink();
+    sent.push(second);
+    await hasPreview(second);
   });
 
   test('just comes at the reduced animation level', async({page}) => {

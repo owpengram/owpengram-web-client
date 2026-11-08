@@ -31,7 +31,9 @@ export enum INTERNAL_LINK_TYPE {
   CHATS,
   CONFERENCE_CALL,
   ADD_AI_STYLE,
-  CONTACT_TOKEN
+  CONTACT_TOKEN,
+  WALLET_SEND,
+  TON_CONNECT
 };
 
 export type InternalLink =
@@ -63,7 +65,9 @@ export type InternalLink =
   InternalLink.InternalLinkChats |
   InternalLink.InternalLinkConferenceCall |
   InternalLink.InternalLinkAddAiStyle |
-  InternalLink.InternalLinkContactToken;
+  InternalLink.InternalLinkContactToken |
+  InternalLink.InternalLinkWalletSend |
+  InternalLink.InternalLinkTonConnect;
 
 export namespace InternalLink {
   export interface InternalLinkMessage {
@@ -81,6 +85,7 @@ export namespace InternalLink {
     single?: string, // present (empty) when the link is to this one item of an album, not to the whole album
     text?: string,
     game?: string, // a bot's game, by its short name, to share to a chat
+    free?: string, // a code that removes the owner's message fee for the one who follows the link
     stack?: ChatSetPeerOptions['stack'] // local
   }
 
@@ -120,7 +125,8 @@ export namespace InternalLink {
   export interface InternalLinkUserPhoneNumber {
     _: INTERNAL_LINK_TYPE.USER_PHONE_NUMBER,
     phone: string,
-    text?: string
+    text?: string,
+    free?: string // a code that removes the owner's message fee for the one who follows the link
   }
 
   export interface InternalLinkInvoice {
@@ -182,6 +188,30 @@ export namespace InternalLink {
   export interface InternalLinkBusinessChat {
     _: INTERNAL_LINK_TYPE.BUSINESS_CHAT,
     slug: string
+  }
+
+  /**
+   * `t.me/sendgrams?to=@user|address&amount=…&text=…` or `ton://transfer/<address>?amount=&text=&exp=`
+   */
+  export interface InternalLinkWalletSend {
+    _: INTERNAL_LINK_TYPE.WALLET_SEND,
+    to?: string,
+    /** Grams as a decimal */
+    amount?: string,
+    text?: string,
+    /** the comment goes encrypted: `1` / `true` */
+    encrypted?: string,
+    /** the whole `ton://transfer` link, parsed by the wallet engine */
+    tonLink?: string
+  }
+
+  /**
+   * A TON Connect link (`tc://`, `tg://ton-connect`, `t.me/sendgrams?startapp=tonconnect-…`): a dApp connecting to the
+   * wallet, or waking it up for a request it sent
+   */
+  export interface InternalLinkTonConnect {
+    _: INTERNAL_LINK_TYPE.TON_CONNECT,
+    url: string
   }
 
   export interface InternalLinkStarsTopup {
@@ -256,7 +286,8 @@ export namespace InternalLink {
   // (`contacts.exportContactToken`): whoever opens it gets its owner as a contact
   export interface InternalLinkContactToken {
     _: INTERNAL_LINK_TYPE.CONTACT_TOKEN,
-    token: string
+    token: string,
+    free?: string // a code that removes the owner's message fee for the one who follows the link
   }
 }
 
@@ -290,4 +321,6 @@ export type InternalLinkTypeMap = {
   [INTERNAL_LINK_TYPE.CONFERENCE_CALL]: InternalLink.InternalLinkConferenceCall,
   [INTERNAL_LINK_TYPE.ADD_AI_STYLE]: InternalLink.InternalLinkAddAiStyle,
   [INTERNAL_LINK_TYPE.CONTACT_TOKEN]: InternalLink.InternalLinkContactToken,
+  [INTERNAL_LINK_TYPE.WALLET_SEND]: InternalLink.InternalLinkWalletSend,
+  [INTERNAL_LINK_TYPE.TON_CONNECT]: InternalLink.InternalLinkTonConnect,
 };

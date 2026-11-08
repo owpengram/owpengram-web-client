@@ -17,3 +17,6 @@ import './calls';
 import './callRating';
 import './richEditor';
 import './memberTags';
+import './wallet';
+import './walletTonConnect';
+import './wallpapers';

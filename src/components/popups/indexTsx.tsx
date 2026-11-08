@@ -51,6 +51,8 @@ export type PopupButton = {
 export type PopupOptions = Partial<{
   closable: boolean,
   onBackClick: () => void | false,
+  /** It has started to show (it is `active` from now on): an opening animated by the popup itself starts here */
+  onShow: () => void,
   onClose: () => void,
   onCloseAfterTimeout: () => void,
   isConfirmationNeededOnClose: () => void | boolean | Promise<any>,
@@ -218,6 +220,7 @@ const PopupElement = (props: {
     previouslyFocusedEl = realmDocument.activeElement as HTMLElement;
     tooltipController.closeAll();
     setShown(true);
+    props.onShow?.();
     const navItem: NavigationItem = {
       type: 'popup',
       noBlurOnPop: Modes.a11y,
@@ -846,6 +849,7 @@ PopupElement.Button = (props: {
       class={classNames(
         !props.noDefaultClass && 'popup-button btn',
         props.noDefaultClass ? undefined : (props.danger ? 'danger' : 'primary'),
+        props.preloader && pending() && 'is-pending',
         props.class
       )}
       noRipple={props.noRipple}

@@ -1178,7 +1178,10 @@ PeerProfile.Link = () => {
         <Row.Icon icon="link_filled" />
         <Row.Title>{toFill().url}</Row.Title>
         <Row.Subtitle>{toFill().also || i18n('SetUrlPlaceholder')}</Row.Subtitle>
-        <PeerProfile.QrButton />
+        {/* the code of a public chat, as on Android: a topic's or an invite link is not one the QR screen carries */}
+        <Show when={toFill().username}>
+          <PeerProfile.QrButton />
+        </Show>
       </Row>
     </Show>
   );
@@ -1669,7 +1672,7 @@ PeerProfile.BotVerification = () => {
             textColor: 'secondary-text-color'
           }
         }).container,
-        text: wrapRichText(verification().description)
+        text: wrapRichText(verification().description.text, {entities: verification().description.entities})
       };
     } else if(officialVerified()) {
       const isBroadcast = (context.peer as Chat.channel).pFlags.broadcast;

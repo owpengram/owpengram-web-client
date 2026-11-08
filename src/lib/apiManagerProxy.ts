@@ -38,7 +38,7 @@ import {NULL_PEER_ID, TEST_NO_STREAMING, THUMB_TYPE_FULL} from '@appManagers/con
 import generateEmptyThumb from '@lib/storages/utils/thumbs/generateEmptyThumb';
 import getStickerThumbKey from '@lib/storages/utils/thumbs/getStickerThumbKey';
 import callbackify from '@helpers/callbackify';
-import isLegacyMessageId from '@appManagers/utils/messageId/isLegacyMessageId';
+import isGlobalHistoryMessageId from '@appManagers/utils/messageId/isGlobalHistoryMessageId';
 import {forgetLoadedURL} from '@helpers/dom/loadedUrlCache';
 import type {SharedObjectURLUpdate} from '@helpers/objectUrlUtils';
 import {replaceAppStateSilent, setAppStateSilent} from '@stores/appState';
@@ -59,7 +59,7 @@ import {createAppURLForAccount} from '@lib/accounts/createAppURLForAccount';
 import {setAppSettingsSilent} from '@stores/appSettings';
 import {batch} from 'solid-js';
 import createNotificationImage from '@helpers/createNotificationImage';
-import EncryptionKeyStore from '@lib/passcode/keyStore';
+import EncryptionKeyStore, {importEncryptionKey} from '@lib/passcode/keyStore';
 import DeferredIsUsingPasscode from '@lib/passcode/deferredIsUsingPasscode';
 import CacheStorageController, {CacheStorageDbName} from '@lib/files/cacheStorage';
 import type {PushSingleManager} from '@appManagers/pushSingleManager';
@@ -448,7 +448,9 @@ class ApiManagerProxy extends MTProtoMessagePort {
       'account_logged_in',
       'notification_cancel',
       'notification_cancel_up_to',
-      'toggle_using_passcode'
+      'toggle_using_passcode',
+      'widget_storage_delete',
+      'widget_storage_remap'
     ]);
 
     // const perf = performance.now();
@@ -535,8 +537,8 @@ class ApiManagerProxy extends MTProtoMessagePort {
         }
       },
 
-      saveEncryptionKey: (payload) => {
-        EncryptionKeyStore.save(payload);
+      saveEncryptionKey: async(payload) => {
+        EncryptionKeyStore.save(await importEncryptionKey(payload));
       },
 
       toggleLock: (isLocked) => {
@@ -547,9 +549,10 @@ class ApiManagerProxy extends MTProtoMessagePort {
         CacheStorageController.temporarilyToggle(enabled);
       },
 
-      toggleUsingPasscode: (payload) => {
+      toggleUsingPasscode: async(payload) => {
+        const encryptionKey = await importEncryptionKey(payload.encryptionKey);
         DeferredIsUsingPasscode.resolveDeferred(payload.isUsingPasscode);
-        EncryptionKeyStore.save(payload.encryptionKey);
+        EncryptionKeyStore.save(encryptionKey);
       }
 
       // hello: () => {
@@ -861,7 +864,10 @@ class ApiManagerProxy extends MTProtoMessagePort {
   }
 
   private registerServiceWorker() {
-    if(!('serviceWorker' in navigator)) return;
+    if(!('serviceWorker' in navigator)) { // * none in this browser: the worker takes one for online until told otherwise
+      this.invokeVoid('serviceWorkerOnline', false);
+      return;
+    }
 
     if(Modes.noServiceWorker) {
       navigator.serviceWorker.getRegistrations().then(regs => {
@@ -1284,7 +1290,7 @@ class ApiManagerProxy extends MTProtoMessagePort {
 
   public getMessageFromStorage(key: MessagesStorageKey, mid: number) {
     // * use global storage instead
-    if(key.endsWith('history') && isLegacyMessageId(mid)) {
+    if(key.endsWith('history') && isGlobalHistoryMessageId(mid)) {
       key = this.getGlobalHistoryMessagesStorage();
     }
 
@@ -1330,7 +1336,7 @@ class ApiManagerProxy extends MTProtoMessagePort {
   }
 
   public getMessageById(messageId: number) {
-    if(isLegacyMessageId(messageId)) {
+    if(isGlobalHistoryMessageId(messageId)) {
       return this.getMessageFromStorage(this.getGlobalHistoryMessagesStorage(), messageId);
     }
   }

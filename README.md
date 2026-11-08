@@ -18,7 +18,7 @@ Private by design, comfortable to use, and free from lock-in.
 > carries this client inside its binary and serves it on its own address. You
 > can also host it separately and point it at a server.
 
-> 🔗 Built on **MTProto API layer 229**, on top of Telegram Web K
+> 🔗 Built on **MTProto API layer 233**, on top of Telegram Web K
 > ([tweb](https://github.com/morethanwords/tweb)).
 
 ---

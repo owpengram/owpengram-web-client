@@ -60,6 +60,7 @@ import {
   getShapeTracks,
   getTailOffset,
   isVisible,
+  paintShapeGradient,
   Point,
   snapBox,
   startOnNextFrame,
@@ -144,6 +145,8 @@ type BubbleCapture = {
   },
   // whether it had a text at all
   hadText: boolean,
+  // where it stood, if it was highlighted (`HIGHLIGHTED`): the highlight behind it goes from there with it
+  row?: Box,
   time?: {
     from: Point,
     copy: HTMLElement,
@@ -319,6 +322,11 @@ function getParts(content: HTMLElement) {
 }
 
 const isGradient = (element: Element) => element.classList.contains('bubble-gradient');
+
+// a bubble lit as the context menu's target, as a selected message, or as the one jumped to: by a stripe behind it, as
+// tall as it is (its `::after`), which is laid out at once as big as it ends
+const HIGHLIGHTED = '.is-active, .is-selected, .is-highlighted';
+const canMovePseudo = typeof KeyframeEffect !== 'undefined' && 'pseudoElement' in KeyframeEffect.prototype;
 
 // the part an element is in: the nearest of those holding it, the last of them as the parts go from the outside in
 function getHolder<T>(parts: T[], elementOf: (part: T) => HTMLElement, element: HTMLElement) {
@@ -500,6 +508,10 @@ function captureBubble(
   }
 
   if(motion) {
+    if(canMovePseudo && bubble.matches(HIGHLIGHTED)) {
+      capture.row = toBox(bubble.getBoundingClientRect());
+    }
+
     // a box that cuts what it holds (media) cannot be drawn bigger or smaller than it is
     if(style.overflow === 'visible') {
       capture.background = getBubbleBackground(content, style, rect);
@@ -618,6 +630,14 @@ export class BubbleTransition {
     private motion: boolean
   ) {}
 
+  /**
+   * The bubbles it shows changing. While it plays, the background of each is drawn by it, not by the bubble
+   * (`.morphing`): what reads a bubble's colours then reads none
+   */
+  public get bubbles() {
+    return this.captures.map(({bubble, replacement}) => replacement ?? bubble);
+  }
+
   /** The bubble `source` was is rendered anew as `bubble`: the change is shown in that one */
   public replace(source: HTMLElement, bubble: HTMLElement) {
     const capture = this.captures.find((capture) => capture.bubble === source);
@@ -662,14 +682,14 @@ export class BubbleTransition {
 
     // a way that goes nowhere (a background that only grows across does not move up) is where it ends: no
     // animation for the compositor to run and the page to restyle every frame
-    const moving = tracks.filter(({element, keyframes}) => {
+    const moving = tracks.filter(({element, keyframes, pseudoElement}) => {
       const last = keyframes[keyframes.length - 1];
       const still = keyframes.every((keyframe) => keyframe.transform === last.transform &&
         keyframe.translate === last.translate &&
         keyframe.scale === last.scale &&
         keyframe.opacity === last.opacity);
       // where it is anyway (a part of the message that only moves across) is left as it is
-      if(still && !/^(translate[XY]\(0px\)|0px 0px)$/.test((last.transform ?? last.translate) as string)) {
+      if(still && !pseudoElement && !/^(translate[XY]\(0px\)|0px 0px)$/.test((last.transform ?? last.translate) as string)) {
         if(last.transform !== undefined) element.style.transform = last.transform as string;
         if(last.translate !== undefined) element.style.translate = last.translate as string;
       }
@@ -710,6 +730,8 @@ export class BubbleTransition {
     const wrapper = content.parentElement;
     const rect = content.getBoundingClientRect();
     const origin: Point = {x: rect.left, y: rect.top};
+
+    this.playHighlight(capture, tracks);
 
     if(capture.ghost && capture.ghost.kind !== getKind(capture.replacement)) {
       this.playKindChange(capture, content, rect, origin, tracks, cleanups);
@@ -1047,6 +1069,41 @@ export class BubbleTransition {
   }
 
   /**
+   * The stripe a highlighted bubble is lit by goes from where the bubble stood to where it stands, as the messages
+   * about it do, rather than standing over them as tall as it ends: moved and stretched about its middle
+   */
+  private playHighlight(capture: BubbleCapture, tracks: Track[]) {
+    const bubble = capture.replacement ?? capture.bubble;
+    if(!capture.row || !bubble.matches(HIGHLIGHTED)) {
+      return;
+    }
+
+    const style = getComputedStyle(bubble, '::after');
+    if(style.display === 'none' || style.position !== 'absolute') {
+      return;
+    }
+
+    // from the bubble's edges, as it is laid out by them
+    const [top, bottom] = [parseFloat(style.top), parseFloat(style.bottom)];
+    const stripe = (box: Box | DOMRect) => ({top: box.top + top, bottom: box.bottom - bottom});
+    const [from, to] = [stripe(capture.row), stripe(bubble.getBoundingClientRect())];
+    const scale = (from.bottom - from.top) / (to.bottom - to.top);
+    const y = (from.top + from.bottom - to.top - to.bottom) / 2;
+    if(!isFinite(scale) || (Math.abs(y) < .5 && Math.abs(scale - 1) * (to.bottom - to.top) < .5)) {
+      return;
+    }
+
+    // its own transform (centring it across) goes on under the way
+    const base = style.transform && style.transform !== 'none' ? ' ' + style.transform : '';
+    tracks.push({
+      element: bubble,
+      pseudoElement: '::after',
+      keyframes: [{transform: `translateY(${y}px) scaleY(${scale})${base}`}, {transform: `translateY(0px) scaleY(1)${base}`}],
+      easing: EASING_Y
+    });
+  }
+
+  /**
    * What stands where it ends going there from `own` away, across by its `translate` and up by its `transform`, each
    * on its curve: a transform of its own (a button turned round) goes on under the way, and an axis it does not go along
    * is left alone
@@ -1237,10 +1294,15 @@ export class BubbleTransition {
       });
       const fades = fromFilled !== toFilled;
       if((fromFilled || toFilled) && (isResized || fades)) {
-        // a bubble of a gradient is (nearly) all of its colour where it ends up: the shape is of that, over its piece
-        // of the gradient, which gives way (`.morphing`); one that has no background any more keeps the colour it was
-        const color = readOutgoingMessageGradient(content) ? toBackground.color : background.color;
+        // a bubble of a gradient is of the part of it where it ends up, which the shape is drawn of, its own piece giving
+        // way (`.morphing`); one that has no background any more keeps the colour it was
+        const gradient = readOutgoingMessageGradient(content);
+        const color = gradient ? toBackground.color : background.color;
         const parts = createShapeParts({...background, color, radii}, tail?.element);
+        if(gradient) {
+          paintShapeGradient(parts, gradient, to, origin);
+        }
+
         const under = createLayer();
         under.classList.add(styles.under);
         under.append(parts.background);

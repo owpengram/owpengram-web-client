@@ -5,7 +5,7 @@
  * https://github.com/zhukov/webogram/blob/master/LICENSE
  */
 
-import {ConstructorDeclMap, Message, MessageFwdHeader, Peer, StarsAmount, Update, Updates} from '@layer';
+import {ConstructorDeclMap, Message, MessageFwdHeader, Peer, StarsAmount, Update, Updates, UpdatesChannelDifference, UpdatesDifference} from '@layer';
 import {LogTypes} from '@lib/logger';
 import assumeType from '@helpers/assumeType';
 import App from '@config/app';
@@ -320,6 +320,13 @@ class ApiUpdatesManager {
       qts: -1
     }, {
       timeout: 0x7fffffff
+    }).catch((err: ApiError): Promise<UpdatesDifference.updatesDifferenceTooLong> => {
+      // * a difference this client cannot read is the same one on every try, and the updates after it wait
+      // * for it for good: go on from where the server is now, as from a difference too long
+      if(err.type !== 'NETWORK_RESULT_UNREADABLE') throw err;
+      log.error('unreadable difference, skipping to the current state');
+      return this.apiManager.invokeApi('updates.getState', {}, {noErrorBox: true})
+      .then((state) => ({_: 'updates.differenceTooLong', pts: state.pts}));
     }).then((differenceResult) => {
       log('result', differenceResult);
       updatesState.syncProgressTime = Date.now();
@@ -437,7 +444,12 @@ class ApiUpdatesManager {
       filter: {_: 'channelMessagesFilterEmpty'},
       pts: channelState.pts,
       limit: 1000
-    }, {timeout: 0x7fffffff}).then((differenceResult) => {
+    }, {timeout: 0x7fffffff}).catch((err: ApiError): UpdatesChannelDifference.updatesChannelDifferenceTooLong => {
+      // * as for the account's difference: a channel's this client cannot read reloads the channel
+      if(err.type !== 'NETWORK_RESULT_UNREADABLE') throw err;
+      log.error('unreadable channel difference, reloading the channel');
+      return {_: 'updates.channelDifferenceTooLong', pFlags: {}, dialog: undefined, messages: [], chats: [], users: []};
+    }).then((differenceResult) => {
       log('diff result', differenceResult)
       channelState.pts = 'pts' in differenceResult ? differenceResult.pts : undefined;
       channelState.lastDifferenceTime = channelState.syncProgressTime = Date.now();
@@ -629,6 +641,10 @@ class ApiUpdatesManager {
       /* case 'updateDeleteChannelMessages':
         channelId = update.channel_id;
         break; */
+      // a widget's state in a channel's pts sequence, if the server ever sends it there (it edits the post instead)
+      case 'updateMessageWidgetData':
+        channelId = (update.peer as Peer.peerChannel).channel_id;
+        break;
       case 'updateChannelTooLong':
         channelId = update.channel_id;
         if(!(channelId in this.channelStates)) {
@@ -649,6 +665,13 @@ class ApiUpdatesManager {
     log('process', curState.pts, copy(update));
 
     if(curState.syncLoading && !options.ignoreSyncLoading) {
+      // * a sent message's id has no pts or seq of its own and no difference brings it again, while the
+      // * message may come through its channel's state, which is not syncing: it is kept anyway (tdesktop's
+      // * feedMessageIds). The state is left for the difference to move
+      if(update._ === 'updateMessageID') {
+        this.saveUpdate(update);
+      }
+
       log('ignoring update, sync loading');
       return false;
     } else if(curState.syncLoading) {

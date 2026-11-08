@@ -38,6 +38,7 @@ import callbackify from '@helpers/callbackify';
 import confirmationPopup from '@components/confirmationPopup';
 import noop from '@helpers/noop';
 import clearHistoryWithConfirmation from '@components/clearHistory';
+import {isWalletAvailable, isWalletReleased} from '@lib/wallet/release';
 import blockUserWithConfirmation, {unblockUser} from '@components/blockUser';
 import shareContact, {canShareContact} from '@components/shareContact';
 import addContact from '@components/addContact';
@@ -631,6 +632,29 @@ export default class ChatTopbar {
       verify: async() => (
         this.chat.isChannel || (this.chat.peerId.isUser() && !this.chat.isBot && (await this.managers.appUsersManager.isRegularUser(this.peerId)))
       ) && !(this.chat.type === ChatType.Logs)
+    }, {
+      icon: 'wallet',
+      text: 'WalletSendMoney',
+      onClick: () => {
+        const peerId = this.peerId;
+        import('@components/wallet').then(({default: showWalletPopup}) => {
+          showWalletPopup({send: {userId: peerId.toUserId()}, fromChat: true});
+        });
+      },
+      verify: async() => (
+        isWalletReleased() &&
+        this.chat.peerId.isUser() &&
+        !this.chat.isBot &&
+        rootScope.myId !== this.peerId &&
+        this.chat.type !== ChatType.Logs &&
+        (await this.managers.appUsersManager.isRegularUser(this.peerId)) &&
+        isWalletAvailable(await apiManagerProxy.getAppConfig())
+      )
+    }, {
+      icon: 'image',
+      text: 'SetWallpapers',
+      onClick: () => this.chat.toggleThemeChooser(),
+      verify: () => this.chat.canChooseTheme()
     }, {
       icon: 'message',
       text: 'ChannelDirectMessages.Manage',

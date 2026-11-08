@@ -137,7 +137,8 @@ export type StateSettings = {
     sidebarResize: boolean,
     guestBotPrivacy: number, // how many times the guest-bot hint has been shown (capped at 2, like iOS)
     storyReactions: boolean, // * "long tap for more reactions" on a story's heart, once ever (iOS, Android)
-    storyStealthReply: boolean // * the warning that a reply or reaction shows you in Stealth Mode, once ever (iOS)
+    storyStealthReply: boolean, // * the warning that a reply or reaction shows you in Stealth Mode, once ever (iOS)
+    walletGram: number // how many times the wallet's "Gram" hint over the card's gem has been shown (capped at 3, like iOS)
   },
   playbackParams: ReturnType<AppMediaPlaybackController['getPlaybackParams']>,
   translations: {
@@ -148,6 +149,9 @@ export type StateSettings = {
     doNotTranslate: TranslatableLanguageISO[]
   },
   chatContextMenuHintWasShown: boolean,
+  // * the AI editor's request made on every message a chat sends, by chat, topic or direct-message conversation
+  // * (getAiSendStyleKey), as a string (keepAiSendStyle)
+  aiSendStyles: {[chatKey: string]: string},
   passcode: {
     enabled: boolean,
     autoLockTimeoutMins: number, // number | null is not working, gets reset after reloading the page
@@ -202,14 +206,6 @@ export type StateSettings = {
   // The order the contacts tab lists them in, kept between visits the way Android and iOS keep it
   // (tdesktop opens its contacts by last seen every time)
   contactsSortMode: ContactsSortMode,
-  // My QR-code popup: remembers the user's last picked chat-theme + brightness
-  // so reopens land back where they left off. `nightMode` falls back to the
-  // global theme's brightness when unset; `selectedThemeId` empty = the
-  // DEFAULT_THEME sentinel (i.e. "use the current chat theme").
-  qrCode: {
-    nightMode?: boolean,
-    selectedThemeId: string
-  },
   stories: {
     // other people's story videos play in their original quality, not the lower one the server keeps
     // beside it — Premium only, as on iOS and Android (Android's default: on)
@@ -231,6 +227,8 @@ export type State = {
   communityDialogs: {[communityId: string]: Dialog.dialogCommunity},
   joinedCommunityIds: ChatId[] | null,
   botCommands: {[peerId: PeerId]: {[botId: string]: BotCommand[]}},
+  // the permanent code that removes the message fee of the own QR code, kept across opens
+  noPaidMessagesToken: {token: string, url: string, permanent?: boolean} | null,
   // contactsList: UserId[],
   contactsListCachedTime: number,
   updates: Partial<{
@@ -259,6 +257,8 @@ export type State = {
   recentSearch: PeerId[],
   /** Peers whose chat was left behind — closed outright, or switched away from. Newest first. */
   recentlyClosedChats: PeerId[],
+  /** The wallet each profile showed when last opened: the memory of whose address is whose */
+  walletAddresses: {[userId: UserId]: string},
   version: typeof STATE_VERSION,
   build: typeof BUILD,
   authState: AuthState,
@@ -588,7 +588,8 @@ export const SETTINGS_INIT: StateSettings = {
     sidebarResize: false,
     guestBotPrivacy: 0,
     storyReactions: false,
-    storyStealthReply: false
+    storyStealthReply: false,
+    walletGram: 0
   },
   translations: {
     peers: {},
@@ -597,6 +598,7 @@ export const SETTINGS_INIT: StateSettings = {
     showInMenu: true,
     doNotTranslate: []
   },
+  aiSendStyles: {},
   passcode: {
     enabled: false,
     autoLockTimeoutMins: 0,
@@ -623,9 +625,6 @@ export const SETTINGS_INIT: StateSettings = {
   },
   recordingMediaType: 'voice',
   contactsSortMode: 'online',
-  qrCode: {
-    selectedThemeId: ''
-  },
   stories: {
     highQuality: true
   }
@@ -637,6 +636,7 @@ export const STATE_INIT: State = {
   communityDialogs: {},
   joinedCommunityIds: null,
   botCommands: {},
+  noPaidMessagesToken: null,
   // contactsList: [],
   contactsListCachedTime: 0,
   updates: {},
@@ -649,6 +649,7 @@ export const STATE_INIT: State = {
   topPeersCache: {},
   recentSearch: [],
   recentlyClosedChats: [],
+  walletAddresses: {},
   version: STATE_VERSION,
   build: BUILD,
   authState: {

@@ -134,6 +134,7 @@ import {registerHotReloadGuard} from '@lib/solidjs/hotReloadGuardProvider';
 import {DialogElement, findDialogListElement, setPromiseMiddleware, disposeTextHighlight, setDialogSubtitle, isRenderedSubtitleIntact, getFolderTitleTextColor} from '@components/dialogElement';
 import type {DialogDom, DialogElementOptions} from '@components/dialogElement';
 import createStyleRule from '@helpers/dom/createStyleRule';
+import forgetSettledRequest from '@helpers/forgetSettledRequest';
 import {bindManagersToSession} from '@lib/accounts/bindManagersToAccount';
 import {getManagersSession, isSessionLeaving} from '@lib/accounts/getCurrentAccount';
 
@@ -971,14 +972,18 @@ export class AppDialogsManager {
       // this.log('peer_changed total time:', performance.now() - perf);
     });
 
-    rootScope.addEventListener('filter_update', async(filter) => {
-      if(REAL_FOLDERS.has(filter.id)) {
-        return;
-      }
+    // * a folder found by an ask after the start (one made elsewhere that this client had no word of, or every
+    // * folder when the start's ask was refused) comes as a new one rather than an update: its list is made all the same
+    (['filter_update', 'filter_new'] as const).forEach((type) => {
+      rootScope.addEventListener(type, (filter) => {
+        if(REAL_FOLDERS.has(filter.id)) {
+          return;
+        }
 
-      if(!this.filtersRendered[filter.id]) {
-        this.addFilter(filter);
-      }
+        if(!this.filtersRendered[filter.id]) {
+          this.addFilter(filter);
+        }
+      });
     });
 
     // * the folders a chat is in are read off its dialog, which a row only gets anew with an update
@@ -1018,6 +1023,10 @@ export class AppDialogsManager {
       order.forEach((filterId, idx) => {
         const {indexKey, filter} = r[idx];
         const renderedFilter = this.filtersRendered[filterId];
+        // * a folder removed while its place was read is gone, with its list
+        if(!renderedFilter || !filter) {
+          return;
+        }
 
         this.xds[filterId].setIndexKey(indexKey);
 
@@ -1095,7 +1104,7 @@ export class AppDialogsManager {
     if(haveFilters) {
       await addFilters(filtersArr);
     } else {
-      addFiltersPromise = managers.filtersStorage.getDialogFilters().then(addFilters);
+      addFiltersPromise = managers.filtersStorage.getDialogFiltersToStart().then(addFilters);
     }
 
     this.doNotRenderChatList = true;
@@ -1125,6 +1134,9 @@ export class AppDialogsManager {
       this.initListeners();
       this.initedListeners = true;
     }
+
+    // * the folders came from the state: now that their events are listened to, the server's are taken
+    managers.filtersStorage.syncDialogFilters();
 
     haveFilters && this.showFiltersPromise && await wrapPromiseWithMiddleware(this.showFiltersPromise);
 
@@ -1679,14 +1691,7 @@ export class AppDialogsManager {
       previousPromise.then(run, run) :
       run();
     this.forumTabByPeerIdPromises.set(peerId, promise);
-
-    const cleanup = () => {
-      if(this.forumTabByPeerIdPromises.get(peerId) === promise) {
-        this.forumTabByPeerIdPromises.delete(peerId);
-      }
-    };
-    promise.then(cleanup, cleanup);
-    return promise;
+    return forgetSettledRequest(this.forumTabByPeerIdPromises, peerId, promise);
   }
 
   private async toggleForumTabByPeerIdInternal(
@@ -2561,7 +2566,7 @@ export class AppDialogsManager {
     //   dom.statusSpan.parentElement.classList.toggle('is-closed', !!dialog.pFlags.closed);
     // }
 
-    const hasPinnedBadge = isPinned && !isMonoforumThread && !isAllChats;
+    const showsPinned = isPinned && !isMonoforumThread && !isAllChats;
     const hasUnreadBadge = isDialogUnread;
     const hasUnreadAvatarBadge = dialogElement.isMainList !== false &&
       this.xd !== this.xds[FOLDER_ID_ARCHIVE] &&
@@ -2580,6 +2585,18 @@ export class AppDialogsManager {
     });
     const hasReactionsBadge = isSaved ? false : !!dialog.unread_reactions_count;
     const hasPollVotesBadge = isSaved || isMonoforumThread ? false : !!(dialog as Dialog | ForumTopic).unread_poll_votes_count;
+    // * the last message is an incoming Gram transfer not read yet: the gem takes the mention's place and, when the
+    // * transfer is all that is unread, the count's too (iOS ChatListItem)
+    const hasGramBadge = hasUnreadBadge &&
+      !!unreadCount &&
+      !isTopic &&
+      !isSaved &&
+      !isMonoforumThread &&
+      lastMessage?._ === 'messageService' &&
+      lastMessage.action._ === 'messageActionGramTransfer' &&
+      !lastMessage.pFlags.out &&
+      lastMessage.mid > (dialog as Dialog).read_inbox_max_id;
+    const hasOnlyGram = hasGramBadge && unreadCount === 1;
     // * a bot's main mini app opens right from its row in the chat list, as in the official apps -
     // * where the row has nothing unread to show in its place
     dialogElement.hasBotMainApp = peerId.isUser() && !!apiManagerProxy.getUser(peerId.toUserId())?.pFlags?.bot_has_main_app;
@@ -2588,7 +2605,8 @@ export class AppDialogsManager {
       !hasUnreadBadge &&
       !hasMentionsBadge &&
       !hasReactionsBadge &&
-      !hasPollVotesBadge;
+      !hasPollVotesBadge &&
+      !hasGramBadge;
     let unreadBadgeText: string;
     if(hasUnreadBadge) {
       // dom.unreadMessagesSpan.innerText = '' + (unreadCount ? formatNumber(unreadCount, 1) : ' ');
@@ -2597,16 +2615,17 @@ export class AppDialogsManager {
 
     dialogElement.setBadgeState({
       muted: isMuted,
-      pinned: hasPinnedBadge,
-      unread: hasUnreadBadge,
+      pinned: showsPinned,
+      unread: hasUnreadBadge && !hasOnlyGram,
       unreadText: unreadBadgeText,
       unreadCount,
       unreadMention: isMention,
       unreadAvatar: hasUnreadAvatarBadge,
       unreadAvatarText: unreadBadgeText || undefined,
-      mentions: hasMentionsBadge,
+      mentions: hasMentionsBadge && !hasGramBadge,
       reactions: hasReactionsBadge,
       pollVotes: hasPollVotesBadge,
+      gram: hasGramBadge,
       botApp: hasBotAppButton,
       transitionDuration
     });
@@ -2615,16 +2634,6 @@ export class AppDialogsManager {
       const notVisited = isDialogUnread && unreadBadgeText === ' ';
       dom.unreadBadge.classList.toggle('not-visited', notVisited);
     }
-
-    // if(isPinned && !isUnread && !isMention) {
-    //   dom.unreadBadge.classList.add('badge-icon', 'dialog-pinned-icon');
-    //   dom.unreadBadge.replaceChildren(Icon('chatspinned'));
-    // } else if(dom.unreadBadge) {
-    //   dom.unreadBadge.classList.remove('badge-icon', 'dialog-pinned-icon');
-    //   if(!unreadBadgeText) {
-    //     dom.unreadBadge.replaceChildren();
-    //   }
-    // }
 
     deferred.resolve();
   }

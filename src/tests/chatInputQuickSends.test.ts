@@ -53,7 +53,6 @@ function setup() {
     chat: {
       type: ChatType.Chat,
       peerId: 42,
-      bubbles: {readAllHistory: vi.fn()},
       getMessageSendingParams: () => ({
         peerId: 42,
         replyToMsgId: host.replyToMsgId,
@@ -67,8 +66,10 @@ function setup() {
     inputValueGeneration: 0,
     ownSends: [],
     managers: {
-      appMessagesManager: {editMessage: vi.fn(async() => {})},
-      appEmojiManager: {pushRecentEmoji: vi.fn()}
+      appMessagesManager: {readAllHistory: vi.fn(), editMessage: vi.fn(async() => {})},
+      appEmojiManager: {pushRecentEmoji: vi.fn()},
+      // * the limits an edit is held to before it goes
+      apiManager: {getConfig: vi.fn(async() => ({message_length_max: 4096})), getLimit: vi.fn(async() => 1024)}
     },
     // the chat's: one taken in the next chat is that chat's, and alive
     getMiddleware: () => {
@@ -320,7 +321,9 @@ describe('the draft of a chat while a message that left its field is on its way'
   function field(chat: {threadId?: number, monoforumThreadId?: PeerId, isMonoforum?: boolean}, clears = 1) {
     return Object.assign(Object.create(ChatInput.prototype), {
       chat: {peerId: 42, ...chat},
-      ownSends: [{clears, until: Date.now() + 1e4}]
+      ownSends: [{clears, until: Date.now() + 1e4}],
+      // * the field the send emptied
+      getCurrentInputAsDraft: (): undefined => undefined
     }) as any;
   }
 

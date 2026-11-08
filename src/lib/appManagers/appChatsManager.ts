@@ -26,6 +26,7 @@ import {SlicedCachedFetcher} from '@appManagers/utils/chats/slicedCachedFetcher'
 import {CHAT_LEGACY_ADMIN_RIGHTS} from '@lib/appManagers/utils/chats/constants';
 import getPhotoInput from '@appManagers/utils/photos/getPhotoInput';
 import {getStickerSetInputById} from '@lib/appManagers/utils/stickers/getStickerSetInput';
+import forgetFailedRequest from '@helpers/forgetFailedRequest';
 
 export type Channel = Chat.channel;
 export type ChatPhotoUpload = {
@@ -68,6 +69,8 @@ type GetAdminLogsFetcherKeyArgs = Pick<FetchAdminLogsArgs, 'channelId' | 'flags'
 
 export class AppChatsManager extends AppManager {
   private storage: AppStoragesManager['storages']['chats'];
+  /** The chats kept on disk are in: what is asked of them before then finds none */
+  public loaded: Promise<unknown>;
 
   private chats: {[id: ChatId]: Exclude<Chat, Chat.chatEmpty>};
   // private usernames: any;
@@ -90,7 +93,7 @@ export class AppChatsManager extends AppManager {
       updateChatDefaultBannedRights: this.onUpdateChatDefaultBannedRights
     });
 
-    return Promise.all([
+    return this.loaded = Promise.all([
       this.appStateManager.getState(),
       this.appStoragesManager.loadStorage('chats')
     ]).then(([state, {results: chats, storage}]) => {
@@ -374,19 +377,27 @@ export class AppChatsManager extends AppManager {
       delete chat.linked_community_id;
     }
 
-    this.mirrorChat(chat);
-    this.rootScope.dispatchEvent('chat_update', chatId);
+    this.onChatChanged(chat);
     this.appCommunitiesManager.handlePeerLinkedCommunityUpdate({
       peerId: chatId.toPeerId(true),
       previousCommunityId,
       communityId
     });
-    if(this.peersStorage.isPeerNeeded(chatId.toPeerId(true))) {
+    return true;
+  }
+
+  /**
+   * A chat changed in place: the tabs' copy of it (what they read synchronously), the listeners and the copy kept
+   * for the next start follow
+   */
+  private onChatChanged(chat: Exclude<Chat, Chat.chatEmpty>) {
+    this.mirrorChat(chat);
+    this.rootScope.dispatchEvent('chat_update', chat.id);
+    if(this.peersStorage.isPeerNeeded(chat.id.toPeerId(true))) {
       this.storage.set({
-        [chatId]: chat
+        [chat.id]: chat
       });
     }
-    return true;
   }
 
   /**
@@ -1453,7 +1464,7 @@ export class AppChatsManager extends AppManager {
       return result;
     }
 
-    const promise = this.recommendations[chatId] = this.apiManager.invokeApiSingleProcess({
+    const promise = this.recommendations[chatId] = forgetFailedRequest(this.apiManager.invokeApiSingleProcess({
       method: 'channels.getChannelRecommendations',
       params: {
         channel: chatId ? this.getChannelInput(chatId) : undefined
@@ -1467,7 +1478,7 @@ export class AppChatsManager extends AppManager {
 
         return messagesChats;
       }
-    });
+    }), () => this.recommendations[chatId], () => delete this.recommendations[chatId]);
 
     return promise;
   }
@@ -1586,7 +1597,7 @@ export class AppChatsManager extends AppManager {
     const chat = this.chats[chatId] as Chat.chat;
     if(chat) {
       chat.default_banned_rights = update.default_banned_rights;
-      this.rootScope.dispatchEvent('chat_update', chatId);
+      this.onChatChanged(chat);
     }
   };
 }

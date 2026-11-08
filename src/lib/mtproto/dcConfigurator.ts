@@ -16,6 +16,7 @@ import {IS_WEB_WORKER} from '@helpers/context';
 import {DcId} from '@types';
 import {getEnvironment} from '@environment/utils';
 import SocketProxied from '@lib/mtproto/transports/socketProxied';
+import isValidDcId from '@lib/mtproto/isValidDcId';
 
 export type TransportType = 'websocket' | 'https' | 'http';
 export type ConnectionType = 'client' | 'download' | 'upload';
@@ -41,12 +42,11 @@ const RETRY_TIMEOUT_DOWNLOAD = 3000;
 // resolves to OWPENGRAM_SERVER): it also keys stored auth keys, and the five-DC
 // range is what the rest of the client and the server's own dc_options assume.
 export function assertValidDcId(dcId: DcId): DcId {
-  const id = +dcId;
-  if(!Number.isInteger(id) || id < 1 || id > 5) {
+  if(!isValidDcId(dcId)) {
     throw new Error('[MT] invalid dcId: ' + dcId);
   }
 
-  return id as DcId;
+  return +dcId as DcId;
 }
 
 export function constructTelegramWebSocketUrl(_dcId: DcId, connectionType: ConnectionType, premium?: boolean) {

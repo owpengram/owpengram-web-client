@@ -25,6 +25,7 @@ import Button from '@components/button';
 import Icon from '@components/icon';
 import setCurrentTime from '@helpers/dom/setCurrentTime';
 import {i18n} from '@lib/langPack';
+import iconButtonLabel from '@helpers/dom/iconButtonLabel';
 import {numberThousandSplitterForWatching} from '@helpers/number/numberThousandSplitter';
 import createCanvasStream from '@helpers/canvas/createCanvasStream';
 import simulateEvent from '@helpers/dom/dispatchEvent';
@@ -287,8 +288,12 @@ export default class VideoPlayer extends ControlsHover {
     }
 
     this.wrapper.classList.toggle('is-playing', isPlaying);
+    // * the icon comes after the button is made: its name comes with it
+    const icon: Icon = isPlaying ? 'pause_filled' : 'play_filled';
+    const label = iconButtonLabel(icon);
     this.toggles.forEach((toggle) => {
-      toggle.replaceChildren(Icon(isPlaying ? 'pause_filled' : 'play_filled'));
+      toggle.replaceChildren(Icon(icon));
+      toggle.setAttribute('aria-label', label);
     });
   }
 
@@ -316,7 +321,7 @@ export default class VideoPlayer extends ControlsHover {
       if(live) {
         this.toggles = [];
       } else {
-        const leftToggle = ButtonIcon(` ${skin}__button toggle`, {noRipple: true});
+        const leftToggle = ButtonIcon(` ${skin}__button toggle`, {noRipple: true, ariaLabel: 'Play'});
         leftControls.prepend(leftToggle);
         this.toggles = [leftToggle];
       }
@@ -326,7 +331,7 @@ export default class VideoPlayer extends ControlsHover {
         this.playbackRateButton = createPlaybackRateButton({skin: this.skin, onMenuToggle: this.onMenuToggle});
       }
       if(!IS_MOBILE && document.pictureInPictureEnabled) {
-        this.pipButton = ButtonIcon(`pip ${skin}__button`, {noRipple: true});
+        this.pipButton = ButtonIcon(`pip ${skin}__button`, {noRipple: true, ariaLabel: 'PictureInPicture'});
       }
       const fullScreenButton = ButtonIcon(` ${skin}__button`, {noRipple: true});
 
@@ -398,7 +403,8 @@ export default class VideoPlayer extends ControlsHover {
           let good = true;
           if(code === 'KeyF') {
             this.toggleFullScreen();
-          } else if(code === 'KeyM') {
+          // * M alone: held with Cmd it minimizes the window on a Mac, with Option it types a character
+          } else if(code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             appMediaPlaybackController.muted = !appMediaPlaybackController.muted;
           } else if(code === 'Space' && this.canPause) {
             this.togglePlay();

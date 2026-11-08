@@ -1,7 +1,7 @@
 /*
  * What is sent flies out of where it was sent from into its message, as in Telegram for iOS
- * (ChatMessageTransitionNode) and Android (TextMessageEnterTransition and the sticker and voice
- * transitions of ChatActivity):
+ * (ChatMessageTransitionNode) and Android (TextMessageEnterTransition and the sticker transitions of
+ * ChatActivity):
  *
  * - text from the composer: the bubble's background grows out of the composer's capsule and goes to
  *   where the bubble stands, and the text goes with it from where it was typed. The field's own text, a
@@ -12,8 +12,10 @@
  *   growing with them as they go;
  * - a sticker or a GIF from the panel, a round video from its preview: the picture goes from where it was
  *   to the message's media and grows or shrinks to its size; the rest of the message (its time) comes late,
- *   where it stands. A sticker or a GIF starts on the frame it was chosen at;
- * - a voice message: the send button's circle becomes the message's play button.
+ *   where it stands. A sticker or a GIF starts on the frame it was chosen at.
+ *
+ * A voice message flies nothing: the send button it is sent from stays where it is, in the composer, and a copy of
+ * it flying into the message would be a second one.
  *
  * Across and up have curves of their own, iOS's — across fast, up slower — which bends the way; both last
  * 300 ms.
@@ -59,6 +61,7 @@ import lottieLoader from '@lib/lottie/lottieLoader';
 import type LottiePlayer from '@lib/lottie/lottiePlayer';
 import {getSendingStatusIconState, setSendingStatusIconState, settleSendingStatusIconCopy} from '@components/sendingStatusIcon';
 import {getOutgoingMessageGradientColorAt, OutgoingMessageGradientPlace, readOutgoingMessageGradient} from '@helpers/outgoingMessageGradient';
+import shallowCopy from '@helpers/dom/shallowCopy';
 import {
   Axes,
   bubbleShapeStyles,
@@ -86,6 +89,7 @@ import {
   layOut,
   makeBox,
   moveBox,
+  paintShapeGradient,
   Point,
   setShapeRadii,
   ShapeParts,
@@ -95,7 +99,7 @@ import {
   toBox,
   Track
 } from '@components/chat/bubbleShape';
-import copyElement, {CopyPairs, dropIdentity, keepContext, keepStyle, paintPlayerFrame} from '@components/chat/copyElement';
+import copyElement, {dropIdentity, keepContext, paintPlayerFrame} from '@components/chat/copyElement';
 import {Message, MessageMedia} from '@layer';
 import type {MyDocument} from '@appManagers/appDocsManager';
 import styles from '@components/chat/sendFlights.module.scss';
@@ -162,9 +166,7 @@ export type SendFlightsHost = {
 };
 
 type Layer = {
-  element: HTMLElement,
-  /** how much it shows, by how far the way up has gone */
-  opacity?: (pY: number) => number
+  element: HTMLElement
 };
 
 /** where a picture that plays was as it was chosen: a sticker's frame, a video's time */
@@ -176,9 +178,7 @@ type FlightTarget = {
   /** what is not seen while the copy flies */
   hidden: HTMLElement[],
   /** what comes late, where it stands */
-  lateIn?: HTMLElement[],
-  /** more layers of the copy */
-  layers?: Layer[]
+  lateIn?: HTMLElement[]
 };
 
 const boxAround = (boxes: Box[]) => makeBox(
@@ -330,27 +330,6 @@ function putEmoji(copy: HTMLElement, picture: HTMLCanvasElement, box: Box, from:
 }
 
 /**
- * A copy of a control (a button, a play button): small, and styled by rules through its ancestors, which a
- * copy drawn elsewhere would not get — so how each of its elements looks is put on it.
- */
-function copyControl(original: HTMLElement) {
-  const pairs: CopyPairs = new Map();
-  const copy = copyElement(original, pairs);
-  pairs.forEach((value, element) => {
-    const elementCopy = value as HTMLElement;
-    if(!elementCopy.style || !copy.contains(elementCopy)) {
-      return;
-    }
-
-    // its size too: a glyph is often sized only through an ancestor (`.audio .audio-animated-icon`), and its
-    // own is its artwork's
-    keepStyle(element, elementCopy, ['color', 'background-color', 'opacity', 'transform', 'visibility', 'border-radius', 'fill', 'stroke', 'width', 'height']);
-  });
-
-  return copy;
-}
-
-/**
  * The picture a media element (a sticker's canvas, an image, a video) shows now, with where it is drawn. A
  * sticker drawn by a worker has its frame asked for: the canvas comes at once and is painted when the
  * frame arrives.
@@ -428,12 +407,6 @@ function getMessageDocument(message: Message.message) {
   return (message.media as MessageMedia.messageMediaDocument)?.document as MyDocument;
 }
 
-function isVoiceDocument(document: MyDocument) {
-  return document?.type === 'voice' || !!document?.attributes?.some((attribute) => {
-    return attribute._ === 'documentAttributeAudio' && attribute.pFlags.voice;
-  });
-}
-
 function isRoundDocument(document: MyDocument) {
   return document?.type === 'round' || !!document?.attributes?.some((attribute) => {
     return attribute._ === 'documentAttributeVideo' && attribute.pFlags.round_message;
@@ -481,9 +454,7 @@ function borrow(element: HTMLElement, into: HTMLElement, bubble: HTMLElement, si
   // as big, any other (the big emoji, laid out by their pictures and their line) by a copy of it
   let placeholder: HTMLElement;
   if(element.style.width && element.style.height) {
-    placeholder = document.createElement(element.tagName);
-    placeholder.className = element.className;
-    placeholder.style.cssText = element.style.cssText;
+    placeholder = shallowCopy(element);
     placeholder.style.boxSizing = 'border-box';
     placeholder.style.width = `${size.width}px`;
     placeholder.style.height = `${size.height}px`;
@@ -505,9 +476,7 @@ function borrow(element: HTMLElement, into: HTMLElement, bubble: HTMLElement, si
   }
 
   for(const ancestor of chain) {
-    const shell = document.createElement(ancestor.tagName);
-    shell.className = ancestor.className;
-    shell.style.cssText = ancestor.style.cssText;
+    const shell = shallowCopy(ancestor);
     shell.classList.add(styles.context);
     // under what else the box shows
     holder.insertBefore(shell, holder === into ? into.firstChild : null);
@@ -1394,12 +1363,16 @@ class TextFlight extends SendFlight {
     clipStart.part.append(clipEnd.across);
     this.root.append(background, clipStart.across);
     this.parts = {background, bands, corners, tail, clipStart, clipEnd, bubble, field, panelReply};
+    if(this.gradient) {
+      this.paintGradient(this.end);
+    }
+
     this.followStatus();
     this.followShape();
   }
 
-  // * a bubble of a gradient is (nearly) all of the gradient's colour where it lands: the copy flies in that, and in
-  // * the new one when its place moves (a message sent right after it)
+  // * a bubble of a gradient is of the part of it where it lands: the copy flies in that, and in the new one when its
+  // * place moves (a message sent right after it)
   private paint(end: Box) {
     if(!this.gradient) {
       return;
@@ -1408,7 +1381,17 @@ class TextFlight extends SendFlight {
     this.background.color = getOutgoingMessageGradientColorAt(this.gradient, end);
     if(this.fill) {
       this.fill.style.color = this.background.color;
+      this.paintGradient(end);
     }
+  }
+
+  // * where the pieces end up on the page: where the way ends, moved with the list as far as it went (`end`)
+  private paintGradient(end: Box) {
+    const {origin} = this;
+    paintShapeGradient(this.parts as ShapeParts, this.gradient, this.getPlaces(true), {
+      x: origin.x + end.left - this.end.left,
+      y: origin.y + end.top - this.end.top
+    });
   }
 
   protected followLanding(end: Box) {
@@ -1443,6 +1426,9 @@ class TextFlight extends SendFlight {
       const content = this.target;
       const radii = this.background.radii = getRadii(getComputedStyle(content), content.getBoundingClientRect());
       setShapeRadii(this.parts.corners, radii);
+      if(this.gradient) {
+        this.paintGradient(this.getLanding());
+      }
       this.parts.tail?.across.classList.toggle(styles.hidden, !isVisible(content.querySelector('.bubble-tail')));
       this.animate();
     });
@@ -1597,10 +1583,10 @@ class TextFlight extends SendFlight {
 
 /**
  * A picture going from where it was to the message's: a sticker or a GIF from its cell, a round video from
- * its preview, the send button into the voice message's play button. A sticker or a GIF flies itself, as on
- * iOS: the message's own, held on the moment its cell showed, which the cell's picture gives way to as soon as
- * it shows it too, so that nothing of it is drawn anew on the way or when it is there. Anything else is a copy
- * that fades from over the message's own media at the end.
+ * its preview. A sticker or a GIF flies itself, as on iOS: the message's own, held on the moment its cell
+ * showed, which the cell's picture gives way to as soon as it shows it too, so that nothing of it is drawn anew
+ * on the way or when it is there. Anything else is a copy that fades from over the message's own media at the
+ * end.
  */
 class BoxFlight extends SendFlight {
   private box: HTMLElement;
@@ -1650,7 +1636,6 @@ class BoxFlight extends SendFlight {
       this.lateIn.push(...(found.lateIn || []));
     }
 
-    found.layers?.forEach((layer) => this.layers.push(layer));
     // it flies in with the corners it lands with
     if(!this.options.round) {
       const style = getComputedStyle(found.target);
@@ -1692,14 +1677,7 @@ class BoxFlight extends SendFlight {
   }
 
   protected getTracks() {
-    return [
-      ...grow(this.box.parentElement, this.box, this.base, this.getSource(this.options.from), this.end),
-      ...this.layers.filter((layer) => layer.opacity).map(({element, opacity}): Track => ({
-        element,
-        keyframes: [{opacity: opacity(0)}, {opacity: opacity(1)}],
-        easing: EASING_Y
-      }))
-    ];
+    return grow(this.box.parentElement, this.box, this.base, this.getSource(this.options.from), this.end);
   }
 
   // the picture of its source, which gave way to the message's own on the way: they show the same moment
@@ -1778,24 +1756,6 @@ export default class SendFlights {
         sourceHidden: [circle]
       });
     });
-  }
-
-  /** the send button, as a voice message is sent from it: its circle becomes the play button */
-  public captureVoice({button}: {button: HTMLElement}) {
-    this.capture(() => isVisible(button) && new BoxFlight(this, {
-      matches: (message) => isVoiceDocument(getMessageDocument(message)),
-      from: toBox(button.getBoundingClientRect()),
-      layers: [{element: copyControl(button), opacity: (pY) => 1 - pY}],
-      round: true,
-      findTarget: (bubble) => {
-        const target = bubble.querySelector<HTMLElement>('.audio-toggle');
-        return target && {
-          target,
-          hidden: [target],
-          layers: [{element: copyControl(target), opacity: (pY) => pY}]
-        };
-      }
-    }));
   }
 
   // a copy that cannot be made is no reason for its message not to go: a capture never throws

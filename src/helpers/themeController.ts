@@ -1,7 +1,7 @@
 import type {AppTheme, AppThemeSettings} from '@config/state';
 import type {AccentPreset} from '@config/themePresets';
-import type {BaseTheme, Theme, ThemeSettings} from '@layer';
-import {blendWallpaperForTinted, presetThemeId, presetToThemeSettings} from '@config/themePresets';
+import type {BaseTheme, Theme, ThemeSettings, WallPaper} from '@layer';
+import {blendWallpaperForTinted, getCloudThemeWallpaper, presetThemeId, presetToThemeSettings} from '@config/themePresets';
 import type {AppBackgroundTab} from '@components/sidebarLeft/tabs/background';
 import type {AppChatBackground} from '@components/chat/bubbles/chatBackground';
 import {applyOutgoingMessageGradient, getOutgoingMessageGradient, keepReadableOnOutgoingMessageGradient, MESSAGE_OUT_TINT} from '@helpers/outgoingMessageGradient';
@@ -15,6 +15,7 @@ import customProperties from '@helpers/dom/customProperties';
 import {TelegramWebViewTheme} from '@types';
 import windowSize from '@helpers/windowSize';
 import liteMode from '@helpers/liteMode';
+import {untrack} from 'solid-js';
 import {useAppSettings} from '@stores/appSettings';
 import {joinDeepPath} from '@helpers/object/setDeepProperty';
 import {logger} from '@lib/logger';
@@ -638,13 +639,9 @@ export class ThemeController {
   public applyAccentPreset(preset: AccentPreset) {
     const currentTheme = this.getTheme();
     const baseTheme = this.getBaseThemeForName(currentTheme.name);
-    const settings = presetToThemeSettings(preset, baseTheme);
     // iOS dayColorPresets have `wallpaper: nil` — those presets only swap accent + bubbles
-    // and keep the current wallpaper. Mirror that here: setBackgroundDocument requires a
-    // WallPaper, so fall back to the current AppTheme's wallpaper when the preset omits one.
-    if(!settings.wallpaper) {
-      settings.wallpaper = this.getThemeSettings(currentTheme)?.wallpaper;
-    }
+    // and keep the current wallpaper, which applyNewTheme does for any theme without one.
+    const settings = presetToThemeSettings(preset, baseTheme);
     const synthetic: Theme = {
       _: 'theme',
       id: presetThemeId(preset),
@@ -690,10 +687,12 @@ export class ThemeController {
     // (accent preset). Server cloud themes carry numeric/hash ids.
     const themeId = String(theme.id ?? '');
     const isCurated = themeId === '' || themeId.startsWith('preset:');
-    let effectiveWallpaper = themeSettings.wallpaper;
+    let effectiveWallpaper = getCloudThemeWallpaper(theme, themeSettings);
     if(themeName === 'tinted' && !isCurated && effectiveWallpaper) {
       effectiveWallpaper = blendWallpaperForTinted(effectiveWallpaper, themeSettings.accent_color);
     }
+    // setBackgroundDocument requires a WallPaper; the current one is already of this base
+    effectiveWallpaper ??= this.getThemeWallpaper(currentTheme);
 
     // Preserve every base entry from the cloud theme (mirrors iOS' `[TelegramThemeSettings]`).
     // Only the entry matching the current base gets the (optionally tinted-blended) wallpaper.
@@ -746,6 +745,18 @@ export class ThemeController {
     const baseTheme = this.getBaseThemeForName(themeName);
     return theme.settings.find((s) => s.base_theme._ === baseTheme) ??
       theme.settings.find((s) => s.base_theme._ === ((isNight ?? this.isNightThemeName(themeName)) ? 'baseThemeNight' : 'baseThemeClassic'));
+  }
+
+  // What the chat is drawn on under a theme. Cloud themes often give a base no wallpaper of its own
+  // (mostly baseThemeDay's): those keep the current one, or the factory one where a theme without
+  // one was saved as the current theme.
+  public getThemeWallpaper(theme: Theme | AppTheme): WallPaper {
+    const settings = this.getThemeSettings(theme);
+    // * an AppTheme keeps what was picked; a theme of a chat comes as the server gave it
+    const own = settings && ((theme as AppTheme).name ? settings.wallpaper : getCloudThemeWallpaper(theme as Theme, settings as ThemeSettings));
+    return own ??
+      this.getThemeSettings(this.getTheme())?.wallpaper ??
+      this.getThemeSettings(SETTINGS_INIT.themes.find((t) => t.name === this.getResolvedThemeName())).wallpaper;
   }
 
   // Persist a wallpaper pick (Chat Wallpaper tab grid click / upload) onto the *current*
@@ -881,12 +892,19 @@ export class ThemeController {
       applyAppColor({name: 'secondary-text-color', hex: mainSecondaryTextColor!});
     }
 
+    // * a theme that leaves the bubbles alone (a gift's, say) gets the app's own for this base —
+    // * not whatever the theme applied before it left on the element
+    const bubbleSettings = themeSettings.message_colors?.length ?
+      themeSettings :
+      untrack(() => this.getThemeSettings(this.getTheme(themeName)));
+    const messageColors = bubbleSettings?.message_colors;
+
     // * increased contrast keeps the bubbles of the one colour it adjusts for the text
     const outgoingTextColor = hexToRgb(baseColors['primary-text-color']);
-    const outgoingGradient = this.isHighContrast() ? undefined : getOutgoingMessageGradient(themeSettings.message_colors, !!themeSettings.pFlags?.message_colors_animated, outgoingTextColor);
+    const outgoingGradient = this.isHighContrast() ? undefined : getOutgoingMessageGradient(messageColors, !!bubbleSettings?.pFlags?.message_colors_animated, outgoingTextColor);
     applyOutgoingMessageGradient(element, outgoingGradient);
 
-    if(!themeSettings.message_colors?.length) {
+    if(!messageColors?.length) {
       return;
     }
 
@@ -898,13 +916,13 @@ export class ThemeController {
     const surfaceForMessage = tintedSurfaceRgb ?? hexToRgb(baseColors['surface-color']);
     const baseMessageOutBackgroundColor = mixColors(baseMessageColor, surfaceForMessage, messageLightenAlpha);
 
-    const firstColor = getRgbColorFromTelegramColor(themeSettings.message_colors[0]);
+    const firstColor = getRgbColorFromTelegramColor(messageColors[0]);
 
     let myMessagesAccent = firstColor;
-    if(themeSettings.message_colors.length > 1) {
+    if(messageColors.length > 1) {
       // const w = getAccentColor(hsvTemp1, baseMessageOutBackgroundColor, myMessagesAccent);
 
-      themeSettings.message_colors.slice(1).forEach((nextColor) => {
+      messageColors.slice(1).forEach((nextColor) => {
         myMessagesAccent = getAverageColor(myMessagesAccent, getRgbColorFromTelegramColor(nextColor));
       });
 

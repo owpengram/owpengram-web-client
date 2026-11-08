@@ -2,6 +2,7 @@ import {loadChatBubbles, LOAD_CHAT_BUBBLES_TIMEOUT} from '@/tests/helpers/chatBu
 import type {Message, PeerSettings} from '@layer';
 import '@helpers/peerIdPolyfill';
 import {getMiddleware} from '@helpers/middleware';
+import ListenerSetter from '@helpers/listenerSetter';
 import {render} from 'solid-js/web';
 import ejectBubble from '@components/chat/bubbles/ejectBubble';
 import {markMessageLinkEntity} from '@lib/richTextProcessor/filterDisabledEntities';
@@ -642,6 +643,35 @@ test('fully regroups the live source when message_sent cancels a structural cand
   expect(harness.bubblesToReplace.size).toBe(0);
 
   ejectBubble(oldBubble);
+});
+
+test('the sending of an album leaves its caption to the message that has it', () => {
+  // * an album forwarded from a channel: the caption is the second message's, and every message's
+  // * message_sent gives the bubble's bodies their server identity, in the album's order
+  const albumMessage = (mid: number, text = ''): Message.message => ({...message(), id: mid, mid, grouped_id: '1', message: text});
+  const tempIds = [99.0001, 99.0002, 99.0003];
+  const sent = [100, 101, 102].map((mid, i) => albumMessage(mid, i === 1 ? 'caption' : ''));
+  const bubble = document.createElement('div');
+  const update = vi.fn();
+  const entry = {bubble, controller: {update}, message: albumMessage(tempIds[1], 'caption'), revision: 1, structure: {}, ownsTime: false};
+  const harness = Object.assign(Object.create(ChatBubbles.prototype), {
+    solidMessageBodies: new Map([[bubble, new Map([[tempIds[1], entry]])]]),
+    modifyBubble: (callback: () => void) => callback()
+  }) as any;
+
+  tempIds.forEach((tempId, i) => harness.updateSolidMessageBodyIdentity(bubble, sent[i], tempId));
+
+  expect(entry.message).toBe(sent[1]);
+  expect([...harness.solidMessageBodies.get(bubble).entries()]).toEqual([[101, entry]]);
+  expect(update).toHaveBeenCalledOnce();
+  expect(update.mock.calls[0][0].text.text).toBe('caption');
+
+  // * the only body of a bubble of one message is its own, whatever it is known by
+  const single = {...message(), mid: 103};
+  const singleEntry = {...entry, message: {...message(), mid: 98}};
+  harness.solidMessageBodies.set(bubble, new Map([[98, singleEntry]]));
+  harness.updateSolidMessageBodyIdentity(bubble, single, 97);
+  expect(singleEntry.message).toBe(single);
 });
 
 test('preserves an unsupported source shell and retries it after a cancelled replacement batch', async() => {
@@ -1448,6 +1478,37 @@ test('guards a delayed legacy replacement immediately without owning inert state
   expect(anchor.dispatchEvent(allowed)).toBe(true);
   expect(followed).toHaveBeenCalledOnce();
   expect(bubble.inert).toBe(true);
+});
+
+test('takes no press of a pending bubble\'s buttons, on mousedown either (a touch device presses there)', () => {
+  const container = document.createElement('div');
+  const bubble = document.createElement('div');
+  const button = document.createElement('button');
+  button.classList.add('reply-markup-button');
+  bubble.append(button);
+  container.append(bubble);
+  document.body.append(container);
+
+  const listenerSetter = new ListenerSetter();
+  const harness = Object.assign(Object.create(ChatBubbles.prototype), {
+    container,
+    listenerSetter,
+    chat: {isPreview: true}
+  }) as any;
+  harness.attachContainerListeners();
+
+  const pressed = vi.fn();
+  button.addEventListener('mousedown', pressed);
+  button.addEventListener('click', pressed);
+
+  setBubbleHiddenLinksPending(bubble, true);
+  expect(button.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}))).toBe(false);
+  expect(pressed).not.toHaveBeenCalled();
+
+  setBubbleHiddenLinksPending(bubble, false);
+  expect(button.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}))).toBe(true);
+  expect(pressed).toHaveBeenCalledOnce();
+  listenerSetter.removeAll();
 });
 
 test('guards the ultimate visible source while a hidden-link candidate is still staging', () => {

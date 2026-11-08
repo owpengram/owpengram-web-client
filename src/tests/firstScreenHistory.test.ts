@@ -1,5 +1,6 @@
-import {Message, MessageEntity, MessageMedia} from '@layer';
+import {Message, MessageEntity, MessageMedia, PageBlock, PageTableCell, RichText} from '@layer';
 import {countFirstScreen, estimateBubbleHeight, getBubbleHeightAtLeast, joinHistories, keepFrom, keepRange} from '@components/chat/firstScreenHistory';
+import {makeWidgetMedia} from '@/tests/helpers/widgetFixtures';
 
 let nextId = 1;
 const message = (options: {text?: string, entities?: MessageEntity[], media?: MessageMedia, groupedId?: string} = {}): Message.message => ({
@@ -54,6 +55,9 @@ const video = (w: number, h: number, sticker?: boolean): MessageMedia.messageMed
   }
 });
 
+// * as the chat knows a widget before it runs: the bot's height, else (here) one it remembered for the message
+const getWidgetHeight = (message: Message.message, media: MessageMedia.messageMediaWidget) => media.height || (message.mid % 2 ? 300 : 50);
+
 describe('getBubbleHeightAtLeast', () => {
   it('counts a line for each paragraph, or for each 200 characters', () => {
     expect(getBubbleHeightAtLeast(message({text: 'one'}))).toBe(16);
@@ -94,9 +98,64 @@ describe('getBubbleHeightAtLeast', () => {
     expect(getBubbleHeightAtLeast(message({media: {...photo(720, 1280), ttl_seconds: 10}}))).toBe(0);
   });
 
+  it('counts the text the blocks of a rich message show, whose own text is empty, and nothing they hide or show otherwise', () => {
+    const text = (text: string): RichText => ({_: 'textPlain', text});
+    const paragraph = (value: string): PageBlock => ({_: 'pageBlockParagraph', text: text(value)});
+    const rich = (...blocks: PageBlock[]): Message.message => ({
+      ...message(),
+      rich_message: {_: 'richMessage', pFlags: {}, blocks, photos: [], documents: []}
+    });
+    expect(getBubbleHeightAtLeast(rich(paragraph('one'), paragraph('two'), paragraph('three')))).toBe(3 * 16);
+    const details = (open: boolean): PageBlock => ({
+      _: 'pageBlockDetails',
+      pFlags: open ? {open} : {},
+      title: text('summary'),
+      blocks: Array.from({length: 10}, (_, index) => paragraph('hidden ' + index))
+    });
+    expect(getBubbleHeightAtLeast(rich(paragraph('one'), {_: 'pageBlockDivider'}, details(false)))).toBe(2 * 16);
+    expect(getBubbleHeightAtLeast(rich(details(true)))).toBe(11 * 16);
+    // * one in a list's item, and a collapsed quote
+    expect(getBubbleHeightAtLeast(rich({
+      _: 'pageBlockList',
+      items: [{_: 'pageListItemBlocks', pFlags: {}, blocks: [paragraph('item'), details(false)]}]
+    }))).toBe(2 * 16);
+    expect(getBubbleHeightAtLeast(rich(paragraph('one'), {
+      _: 'pageBlockBlockquote',
+      pFlags: {collapsed: true},
+      text: text(Array.from({length: 10}, (_, index) => 'line ' + index).join('\n')),
+      caption: {_: 'textEmpty'}
+    }))).toBe(16);
+    // * a formula is laid out as one, not as its source is written
+    const source = Array.from({length: 30}, (_, index) => 'x_' + index).join('\n');
+    expect(getBubbleHeightAtLeast(rich({
+      _: 'pageBlockParagraph',
+      text: {_: 'textConcat', texts: [text('one '), {_: 'textBold', text: {_: 'textMath', source}}]}
+    }, {_: 'pageBlockPreformatted', text: text(source), language: 'math'}))).toBe(16);
+    // * what is not counted: a table (its cells side by side), a cover, media and their captions
+    const cell = (lines: number): PageTableCell => ({_: 'pageTableCell', pFlags: {}, text: text(Array.from({length: lines}, () => 'cell').join('\n')), rowspan: 2});
+    expect(getBubbleHeightAtLeast(rich(paragraph('one'), {
+      _: 'pageBlockTable',
+      pFlags: {},
+      title: {_: 'textEmpty'},
+      rows: [{_: 'pageTableRow', cells: [cell(25), cell(25)]}, {_: 'pageTableRow', cells: []}]
+    }, {_: 'pageBlockCover', cover: details(true)}, {
+      _: 'pageBlockPhoto',
+      pFlags: {},
+      photo_id: '1',
+      caption: {_: 'pageCaption', text: text('a caption'), credit: {_: 'textEmpty'}}
+    }))).toBe(16);
+  });
+
   it('does not count a sticker or a service message', () => {
     expect(getBubbleHeightAtLeast(message({media: video(512, 512, true)}))).toBe(0);
     expect(getBubbleHeightAtLeast({_: 'messageService'} as Message.messageService)).toBe(0);
+  });
+
+  it('counts a widget as high as the chat knows it, with its caption, and nothing where widgets are not drawn', () => {
+    expect(getBubbleHeightAtLeast(message({media: makeWidgetMedia({height: 120})}), false, getWidgetHeight)).toBe(120);
+    const captioned = message({text: 'one', media: makeWidgetMedia()});
+    expect(getBubbleHeightAtLeast(captioned, false, getWidgetHeight)).toBe(16 + getWidgetHeight(captioned, makeWidgetMedia()));
+    expect(getBubbleHeightAtLeast(message({text: 'one', media: makeWidgetMedia({height: 120})}))).toBe(16);
   });
 });
 
@@ -127,6 +186,11 @@ describe('estimateBubbleHeight', () => {
       ...message({text: 'a'}),
       reactions: {_: 'messageReactions', pFlags: {}, results: [{_: 'reactionCount', count: 1, reaction: {_: 'reactionEmoji', emoticon: '🔥'}}]}
     }, metrics)).toBe(21 + 32);
+  });
+
+  it('counts a widget as high as the chat knows it', () => {
+    expect(estimateBubbleHeight(message({text: 'a', media: makeWidgetMedia({height: 120})}), metrics, false, getWidgetHeight)).toBe(21 + 120);
+    expect(estimateBubbleHeight(message({text: 'a', media: makeWidgetMedia({height: 120})}), metrics)).toBe(21);
   });
 });
 

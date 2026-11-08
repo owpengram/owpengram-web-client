@@ -47,8 +47,12 @@ export function computeMaxDistToMargin(e: MouseEvent, parentRect: DOMRect, rects
   )));;
 }
 
-export function getTimeForDist(dist: number) {
-  return Math.max(600, Math.sqrt((dist / 160)) * 350);
+// * the worker's dust (`dust`) gathers into the letters on the way, which takes longer than the classic reveal of the
+// * legacy path
+const DUST_SLOWDOWN = 1.7;
+
+export function getTimeForDist(dist: number, dust: boolean) {
+  return Math.max(600, Math.sqrt((dist / 160)) * 350) * (dust ? DUST_SLOWDOWN : 1);
 }
 
 export function toDOMRectArray(list: DOMRectList) {

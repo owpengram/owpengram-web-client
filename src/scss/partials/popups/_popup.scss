@@ -327,7 +327,7 @@
       z-index: 1;
 
       .btn-primary-transparent.danger {
-        background: #fff;
+        background: var(--surface-color);
         box-shadow: 0px 0px 12px 4px var(--section-box-shadow-color) !important;
 
         @include hover() {
@@ -360,6 +360,24 @@
     &.with-icon {
       display: flex;
       align-items: center;
+    }
+
+    // * busy (`preloader`, its callback still out): a spinner in the label's colour stands in for the label,
+    // * which stays the button's name
+    &.is-pending {
+      opacity: 1;
+
+      > .i18n {
+        opacity: 0;
+      }
+
+      .preloader-circular {
+        height: 1.5rem;
+
+        .preloader-path {
+          stroke: currentColor;
+        }
+      }
     }
 
     &-icon {

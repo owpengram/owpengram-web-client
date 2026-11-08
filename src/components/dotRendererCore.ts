@@ -4,6 +4,7 @@ import {IS_MOBILE} from '@environment/userAgent';
 import callbackify from '@helpers/callbackify';
 import callbackifyAll from '@helpers/callbackifyAll';
 import clamp from '@helpers/number/clamp';
+import forgetFailedRequest from '@helpers/forgetFailedRequest';
 
 export type DotRendererConfig = {
   particlesCount: number,
@@ -57,12 +58,13 @@ export function drawClippingCircle(
   progress: number,
   coords: {x: number, y: number},
   maxDist: number,
-  dpr: number
+  dpr: number,
+  featherDivisor = 3.5
 ) {
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.fillStyle = 'white';
-  ctx.shadowBlur = maxDist / 3.5 * dpr * progress;
+  ctx.shadowBlur = maxDist / featherDivisor * dpr * progress;
   ctx.shadowColor = 'white';
   ctx.beginPath();
   ctx.arc(coords.x, coords.y, maxDist * progress, 0, 2 * Math.PI);
@@ -309,11 +311,7 @@ export default class DotRendererCore {
     // a failed init must not be memoized either — otherwise the sim can never come up again and
     // every spoiler awaiting it stays unrendered for the rest of the session
     if(result instanceof Promise) {
-      result.catch(() => {
-        if(this.initPromise === result) {
-          this.initPromise = undefined;
-        }
-      });
+      forgetFailedRequest(result, () => this.initPromise, () => this.initPromise = undefined);
     }
 
     return this.initPromise = result;

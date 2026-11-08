@@ -6,6 +6,7 @@
  */
 
 import type {TrueDcId} from '@types';
+import {BASE_DC_ID} from '@lib/accounts/authKeyFingerprint';
 
 // Empty for a self-hosted build: nothing it is served from is an official
 // Telegram domain, so the "main domain" branch below -- which swaps in
@@ -27,7 +28,7 @@ const App = {
   langPack: 'webk',
   langPackCode: 'en',
   domains: MAIN_DOMAINS,
-  baseDcId: 2 as TrueDcId,
+  baseDcId: BASE_DC_ID as TrueDcId,
   isMainDomain: MAIN_DOMAINS.includes(location.hostname),
   suffix: 'K',
   threads,
